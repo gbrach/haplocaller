@@ -1,0 +1,20 @@
+{
+  "name": "Unistra",
+  "hosts": ["hpc-login", "hpc-n"],
+  "work_root": null,
+  "account": "facvie",
+  "partition": "publicgpu",
+  "gres": "gpu:{gpus}",
+  "constraint": "gpua100|gpuv100",
+  "default_gpus": 1,
+  "default_model": "sup",
+  "default_min_qscore": 7,
+  "cpus": 16,
+  "memory": "64G",
+  "time": "14-00:00:00",
+  "python": "python3",
+  "dorado_module": null,
+  "dorado_executable": null,
+  "minimum_free_gib": 5,
+  "setup_note": "Set work_root, python (with pod5 and pysam), and dorado_executable once before use. Basecalling on Unistra still needs validation."
+}

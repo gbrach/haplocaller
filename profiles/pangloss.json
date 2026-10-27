@@ -1,0 +1,19 @@
+{
+  "name": "Pangloss",
+  "hosts": ["pangloss", "niobe"],
+  "work_root": "/ssd_workspace/{user}",
+  "account": "viseg",
+  "partition": "gpu",
+  "gres": "gpu:tesla:{gpus}",
+  "constraint": null,
+  "default_gpus": 2,
+  "default_model": "sup",
+  "default_min_qscore": 7,
+  "cpus": 16,
+  "memory": "64G",
+  "time": "14-00:00:00",
+  "python": "/usr/bin/python3",
+  "dorado_module": "dorado/2.1.0",
+  "dorado_executable": "dorado",
+  "minimum_free_gib": 5
+}
