@@ -98,17 +98,44 @@ def mapping_tables(path):
     return [{'label': path.name, 'rows': validate_mapping(rows)}]
 
 
-def slurm_args(config, job_script, test_only=False):
+def plan_shards(files, parts):
+    """Split POD5 files into at most `parts` byte-balanced groups (largest first)."""
+    parts = max(1, min(int(parts), len(files)))
+    groups = [{'bytes': 0, 'files': []} for _ in range(parts)]
+    for row in sorted(files, key=lambda r: (-r['bytes'], r['path'])):
+        target = min(groups, key=lambda g: (g['bytes'], len(g['files'])))
+        target['files'].append(row['path'])
+        target['bytes'] += row['bytes']
+    return [sorted(g['files']) for g in groups if g['files']]
+
+
+def slurm_args(config, job_script, test_only=False, role='basecall', dependency=None):
+    """role: 'basecall' (one job, or an array when the run is sharded) or 'merge' (CPU only)."""
     profile = config['profile']
     run = Path(config['run_dir'])
-    args = ['sbatch', '--parsable', '--job-name=haplocaller-' + config['name'],
-            '--account=' + profile['account'], '--partition=' + profile['partition'],
-            '--nodes=1', '--ntasks=1', '--cpus-per-task=' + str(profile['cpus']),
-            '--mem=' + profile['memory'], '--time=' + profile['time'],
-            '--gres=' + profile['gres'].format(gpus=config['gpus']),
-            '--chdir=' + str(run), '--output=' + str(run / 'logs/slurm.log')]
-    if profile.get('constraint'):
-        args.append('--constraint=' + profile['constraint'])
+    sharded = role == 'basecall' and config.get('mode') == 'full' and len(config.get('shards') or []) > 1
+    if role == 'merge':
+        partition = profile.get('cpu_partition') or profile['partition']
+        args = ['sbatch', '--parsable', '--job-name=haplocaller-merge-' + config['name'],
+                '--account=' + profile['account'], '--partition=' + partition,
+                '--nodes=1', '--ntasks=1', '--cpus-per-task=' + str(profile['cpus']),
+                '--mem=' + profile['memory'], '--time=' + profile.get('merge_time', '1-00:00:00'),
+                '--chdir=' + str(run), '--output=' + str(run / 'logs/slurm_merge.log'),
+                '--dependency=afterok:' + str(dependency), '--kill-on-invalid-dep=yes']
+    else:
+        args = ['sbatch', '--parsable', '--job-name=haplocaller-' + config['name'],
+                '--account=' + profile['account'], '--partition=' + profile['partition'],
+                '--nodes=1', '--ntasks=1', '--cpus-per-task=' + str(profile['cpus']),
+                '--mem=' + profile['memory'], '--time=' + profile['time'],
+                '--gres=' + profile['gres'].format(gpus=config['gpus']),
+                '--chdir=' + str(run)]
+        if sharded:
+            args += ['--array=0-' + str(len(config['shards']) - 1),
+                     '--output=' + str(run / 'logs/slurm_%a.log')]
+        else:
+            args.append('--output=' + str(run / 'logs/slurm.log'))
+        if profile.get('constraint'):
+            args.append('--constraint=' + profile['constraint'])
     if test_only:
         args.append('--test-only')
     return args + [str(job_script)]

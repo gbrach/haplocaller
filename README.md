@@ -126,7 +126,16 @@ The current gbrach installation is `/ssd_workspace/gbrach/.basecall/app`, with i
 
 `profiles/pangloss.json` contains the tested account/partition/GPU settings for gbrach, with `/ssd_workspace/{user}` as the working root. Other users may need their own account and workspace settings. `haplocaller setup` saves an override in `~/.config/basecall/profile.json`; advanced resource settings can be edited there. A custom profile can also be selected with `haplocaller --profile /path/to/profile.json`.
 
-The Unistra profile includes the previously checked Slurm settings, but its working directory and Dorado installation still need configuration. Its complete workflow has not been validated. IGBMC is outside the current scope.
+### Unistra: parallel parts under a 24-hour limit
+
+`publicgpu` jobs are capped at 24 h, so the Unistra profile (`max_days: 1`) splits a full run into **parallel parts**. The wizard asks for GPUs per job and the number of parts (default 4, at most the number of POD5 files). Whole POD5 files are divided into byte-balanced groups. Slurm then runs:
+
+1. a GPU **job array**, one Dorado process per part, each with its own GPUs and the 24 h limit;
+2. a CPU **merge job** (`afterok` on the whole array) that concatenates each sample across parts, checks Dorado's counters for every part separately, sums them into the usual verification report, and cleans up.
+
+If any part fails, the merge job is cancelled, finished parts stay on disk, and the status shows the failure. Cancel the other parts with `haplocaller cancel`; there is no automatic resume. Choose enough parts that each finishes within 24 h. The small test always runs as a single job. `watch` sums progress across parts. A dataset with a single huge POD5 file cannot be split by this version.
+
+Unistra setup needs a Python that can import `pod5` and `pysam` (set `python` with `haplocaller setup`) and a Dorado executable (the profile points at `~/Softs/dorado-2.1.1-linux-x64`). The Unistra workflow has not yet been validated end to end. IGBMC is outside the current scope.
 
 ### Sharing and updates
 

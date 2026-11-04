@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from . import software, ui
-from .common import run_file, UserError, command, human_size, mapping_tables, qscore_integer, slurm_args, timestamp, valid_alias, write_json
+from .common import plan_shards, run_file, UserError, command, human_size, mapping_tables, qscore_integer, slurm_args, timestamp, valid_alias, write_json
 from .verification import revalidated
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -158,8 +158,13 @@ def preview(config):
     ui.field('Dataset', f'{config["probe"]["reads"]:,} reads in {len(config["probe"]["files"])} POD5 files ({human_size(config["probe"]["bytes"])})')
     ui.field('Samples', f'{len(config["mapping"])} aliases from {config["mapping_label"]}')
     ui.field('Calling', f'{config["tier"].upper()}, Dorado {config["software"]["version"]}, {config["kit"]}')
-    ui.field('Resources', f'{config["profile"]["name"]}, {config["gpus"]} GPU(s) on one node')
-    ui.field('Runtime', f'{config["runtime_days"]} days requested' if config.get('runtime_days') else config['profile']['time'])
+    parts = config.get('parts', 1)
+    if parts > 1:
+        ui.field('Resources', f'{config["profile"]["name"]}: {parts} parallel parts × {config["gpus"]} GPU(s), then a CPU merge job')
+        ui.field('Splitting', f'whole POD5 files, balanced by size, about {human_size(config["probe"]["bytes"] / parts)} per part (small test uses one job)')
+    else:
+        ui.field('Resources', f'{config["profile"]["name"]}, {config["gpus"]} GPU(s) on one node')
+    ui.field('Runtime', f'{config["runtime_days"]} days requested' + (' per part' if parts > 1 else '') if config.get('runtime_days') else config['profile']['time'])
     ui.field('Quality', 'keep all reads' if config['min_qscore'] == 0 else f'keep Q ≥ {config["min_qscore"]:g}')
     ui.field('Unclassified', config['unclassified'])
     ext, folder = ('fastq.gz', 'fastq') if config['output'] == 'fastq' else ('bam', 'bam')
@@ -205,17 +210,29 @@ def collect(profile, args):
     unclassified = ('keep', 'discard')[choose('Unclassified reads', ['Keep in an unclassified file', 'Discard'],
                                              ('keep', 'discard').index(last.get('unclassified', 'keep')))]
     while True:
-        gpus = ask('GPUs', last.get('gpus', profile['default_gpus']))
+        gpus = ask('GPUs per job' if profile.get('max_days') else 'GPUs', last.get('gpus', profile['default_gpus']))
         if gpus.isdigit() and int(gpus) >= 1:
             gpus = int(gpus)
             break
         ui.notice('Enter a positive number of GPUs. Slurm determines what your account can allocate on one node.')
+    max_days = profile.get('max_days')
+    parts = 1
+    if max_days:
+        files = len(info['files'])
+        print(ui.paint(f'This cluster limits each job to {max_days} day(s). The full dataset is split into parallel parts, '
+                       'each its own job with its own GPUs, then merged. Use enough parts that each finishes in time.', 'muted'))
+        while True:
+            parts = ask('Parallel parts', min(last.get('parts', profile.get('default_parts', 4)), files))
+            if parts.isdigit() and 1 <= int(parts) <= files:
+                parts = int(parts)
+                break
+            ui.notice(f'Enter a whole number from 1 to {files} (parts are made of whole POD5 files).')
     while True:
-        days = ask('Requested runtime in days', last.get('runtime_days', 14))
-        if days.isdigit() and int(days) >= 1:
+        days = ask('Requested runtime in days' + (' per part' if parts > 1 else ''), min(last.get('runtime_days', 14), max_days or 14))
+        if days.isdigit() and int(days) >= 1 and (not max_days or int(days) <= max_days):
             days = int(days)
             break
-        ui.notice('Enter a positive whole number of days. Cluster time limits still apply.')
+        ui.notice('Enter a positive whole number of days' + (f', at most {max_days} on this cluster.' if max_days else '. Cluster time limits still apply.'))
     profile = dict(profile, time=f'{days}-00:00:00')
     default_name = re.sub(r'[^A-Za-z0-9_-]+', '_', source.stem)[:35].strip('_') or 'nanopore'
     default_name += '_' + tier + '_' + dt.date.today().strftime('%Y%m%d')
@@ -242,7 +259,7 @@ def collect(profile, args):
             'probe': info, 'original_input': str(source), 'mapping': mapping, 'mapping_label': tables[0]['label'],
             'mapping_source': str(table), 'mapping_sha256': hashlib.sha256(table.read_bytes()).hexdigest(),
             'tier': tier, 'kit': kit, 'output': output, 'min_qscore': qscore,
-            'unclassified': unclassified, 'gpus': gpus, 'runtime_days': days, 'software': selected_software,
+            'unclassified': unclassified, 'gpus': gpus, 'parts': parts, 'runtime_days': days, 'software': selected_software,
             'stage_input': staged, 'mode': 'pilot', 'created_at': timestamp()}
 
 
@@ -279,6 +296,8 @@ def prepare(config):
                 row.update(path=str(target), mtime_ns=target.stat().st_mtime_ns)
                 print(f'  Copied {index}/{len(config["probe"]["files"])} files', flush=True)
             config['probe']['input'] = str(destination)
+        if config.get('parts', 1) > 1:
+            config['shards'] = plan_shards(config['probe']['files'], config['parts'])
         with (run / 'config/sample_sheet.csv').open('w', newline='') as stream:
             writer = csv.writer(stream)
             writer.writerow(['kit', 'experiment_id', 'flow_cell_id', 'barcode', 'alias'])
@@ -316,12 +335,15 @@ def prepare(config):
             lines.append('module load ' + shlex.quote(module))
         lines.append('exec ' + shlex.join([profile['python'], '-m', 'haplocaller.worker', str(run)]))
         (run / 'job.sh').write_text('\n'.join(lines) + '\n')
+        if config.get('shards'):
+            merge = lines[:-1] + ['exec ' + shlex.join([profile['python'], '-m', 'haplocaller.worker', str(run), 'merge'])]
+            (run / 'job_merge.sh').write_text('\n'.join(merge) + '\n')
         write_json(run_file(run, 'status.json'), {'state': 'ready', 'message': 'Prepared; no job submitted.', 'updated_at': timestamp()})
         cache.mkdir(parents=True, exist_ok=True)
         write_json(cache / 'last_choices.json', {'input': config.get('original_input', config['probe']['input']),
                    'table': config.get('mapping_source'), 'tier': config['tier'], 'output': config['output'],
                    'min_qscore': config['min_qscore'], 'unclassified': config['unclassified'], 'gpus': config['gpus'],
-                   'runtime_days': config.get('runtime_days', 14), 'run': str(run)})
+                   'runtime_days': config.get('runtime_days', 14), 'parts': config.get('parts', 1), 'run': str(run)})
         ui.notice(f'Prepared {run}', 'ok')
         return run
     except BaseException:
@@ -356,7 +378,19 @@ def submit(run, mode):
     job_id = result.stdout.strip().split(';')[0]
     if not job_id.isdigit():
         raise UserError(f'Slurm returned an unexpected response. Check {run}/logs/submission.log before retrying.')
-    write_json(run_file(run, 'submission.json'), {'job_id': job_id, 'mode': mode, 'submitted_at': timestamp()})
+    record = {'job_id': job_id, 'mode': mode, 'submitted_at': timestamp()}
+    write_json(run_file(run, 'submission.json'), record)
+    if mode == 'full' and len(config.get('shards') or []) > 1:
+        merged = command(slurm_args(config, run / 'job_merge.sh', role='merge', dependency=job_id), capture_output=True)
+        (run / 'logs/submission_merge.log').write_text(merged.stdout + merged.stderr)
+        merge_id = merged.stdout.strip().split(';')[0]
+        if merged.returncode or not merge_id.isdigit():
+            command(['scancel', job_id])
+            write_json(run_file(run, 'status.json'), {'state': 'submission_failed', 'message': 'The merge job was not accepted; the part jobs were cancelled.', 'updated_at': timestamp()})
+            raise UserError('Slurm did not accept the merge job, so the parts were cancelled.\n' + merged.stderr.strip())
+        record.update(merge_job_id=merge_id, parts=len(config['shards']))
+        write_json(run_file(run, 'submission.json'), record)
+        job_id = f'{job_id} ({len(config["shards"])} parallel parts) + merge job {merge_id}'
     print()
     ui.notice(f'Submitted {"small test" if mode == "pilot" else "full run"}: job {job_id}. You can close SSH.', 'ok')
     print(f'Watch progress: haplocaller watch {shlex.quote(str(run))}')
@@ -379,14 +413,15 @@ def status(run):
         counts = run_file(run, 'sample_counts.tsv').relative_to(run)
         print(state['message'].replace('counts: sample_counts.tsv', f'counts: {counts}'))
     if (run_file(run, 'submission.json')).is_file():
-        job = json.loads((run_file(run, 'submission.json')).read_text())['job_id']
-        print('Slurm job: ' + job)
+        record = json.loads((run_file(run, 'submission.json')).read_text())
+        job = record['job_id']
+        print('Slurm job: ' + job + (f' (parts) + merge job {record["merge_job_id"]}' if record.get('merge_job_id') else ''))
         if state['state'] in ('complete', 'pilot_complete') and revalidated(report, job):
             print('Existing output revalidated successfully; the original Slurm result below is historical.')
         if shutil.which('squeue'):
-            result = command(['squeue', '-h', '-j', job, '-o', '%T|%R'], capture_output=True)
+            result = command(['squeue', '-h', '-j', job + (',' + record['merge_job_id'] if record.get('merge_job_id') else ''), '-o', '%i|%T|%R'], capture_output=True)
             if result.stdout.strip():
-                print('Scheduler: ' + result.stdout.strip().replace('|', ' — '))
+                print('Scheduler:\n  ' + result.stdout.strip().replace('|', ' — ').replace('\n', '\n  '))
             elif shutil.which('sacct'):
                 result = command(['sacct', '-X', '-j', job, '-nP', '--format=State,ExitCode'], capture_output=True)
                 if result.stdout.strip():
@@ -449,9 +484,10 @@ def main():
                 if action:
                     submit(run, 'pilot' if action == 1 else 'full')
             elif args.command == 'cancel':
-                job = json.loads((run_file(run, 'submission.json')).read_text())['job_id']
-                if yes(f'Cancel Slurm job {job}?'):
-                    command(['scancel', job], check=True)
+                record = json.loads((run_file(run, 'submission.json')).read_text())
+                jobs = [record['job_id']] + ([record['merge_job_id']] if record.get('merge_job_id') else [])
+                if yes(f'Cancel Slurm job {" and ".join(jobs)}?'):
+                    command(['scancel', *jobs], check=True)
                     print('Cancellation requested. Check with haplocaller status.')
             return
         config = collect(load_profile(args.profile), args)

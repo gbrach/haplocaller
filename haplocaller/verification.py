@@ -48,6 +48,11 @@ def dorado_counts(text, expected_raw, written):
     }
 
 
+def combine_counters(parts):
+    """Add the per-part counters of a sharded run; each part was verified on its own."""
+    return {key: sum(part[key] for part in parts) for key in parts[0]}
+
+
 def write_report(root, config, rows, counters, recovery=None):
     by_alias = {row['alias']: row for row in rows}
     with tempfile.NamedTemporaryFile(mode='w', dir=root, prefix='sample_counts.',

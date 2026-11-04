@@ -1,7 +1,10 @@
 {
   "name": "Unistra",
-  "hosts": ["hpc-login", "hpc-n"],
-  "work_root": null,
+  "hosts": [
+    "hpc-login",
+    "hpc-n"
+  ],
+  "work_root": "~/haplocaller",
   "account": "facvie",
   "partition": "publicgpu",
   "gres": "gpu:{gpus}",
@@ -11,10 +14,13 @@
   "default_min_qscore": 7,
   "cpus": 16,
   "memory": "64G",
-  "time": "14-00:00:00",
+  "time": "1-00:00:00",
   "python": "python3",
   "dorado_module": null,
-  "dorado_executable": null,
+  "dorado_executable": "/home2020/home/facvie/gbrach/Softs/dorado-2.1.1-linux-x64/bin/dorado",
   "minimum_free_gib": 5,
-  "setup_note": "Set work_root, python (with pod5 and pysam), and dorado_executable once before use. Basecalling on Unistra still needs validation."
+  "cpu_partition": "public",
+  "max_days": 1,
+  "default_parts": 4,
+  "merge_time": "1-00:00:00"
 }

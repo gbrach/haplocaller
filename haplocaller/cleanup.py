@@ -32,11 +32,12 @@ def _cleanup_run(root, check_scheduler):
     if config['output'] not in ('fastq', 'bam'):
         raise UserError('Unknown output format; temporary files kept.')
     if check_scheduler and (run_file(root, 'submission.json')).is_file():
-        job = str(json.loads((run_file(root, 'submission.json')).read_text())['job_id'])
+        submitted = json.loads((run_file(root, 'submission.json')).read_text())
+        jobs = {str(submitted['job_id']), str(submitted.get('merge_job_id', ''))} - {''}
         result = subprocess.run(['squeue', '-h', '-o', '%i'], capture_output=True, text=True, timeout=15)
         if result.returncode:
             raise UserError('Cannot check Slurm; temporary files kept.')
-        if job in {line.strip().split('_', 1)[0] for line in result.stdout.splitlines()}:
+        if jobs & {line.strip().split('_', 1)[0] for line in result.stdout.splitlines()}:
             raise UserError('The Slurm job is still active; temporary files kept.')
 
     rows = json.loads((root / 'logs/export_counts.json').read_text())
@@ -103,6 +104,12 @@ def _cleanup_run(root, check_scheduler):
             for name in names:
                 path = directory / name
                 identity = path.lstat()
+                if (stat.S_ISLNK(identity.st_mode) and target == root / 'tmp'
+                        and path.relative_to(target).parts[0] == 'shards'
+                        and path.resolve() in input_paths):
+                    # Per-part input links; only the link is removed, never its POD5 target.
+                    files.append((path, identity))
+                    continue
                 if not stat.S_ISREG(identity.st_mode):
                     raise UserError(f'Cleanup file is not a regular file: {path}')
                 if path.suffix.lower() == '.pod5' and target != staged:
@@ -110,7 +117,7 @@ def _cleanup_run(root, check_scheduler):
                 if target == staged and path.resolve() not in input_paths:
                     raise UserError(f'File is not in the staging manifest: {path}')
                 files.append((path, identity))
-    for name in ('job.sh', 'submission.lock'):
+    for name in ('job.sh', 'job_merge.sh', 'submission.lock'):
         path = root / name
         if path.exists() or path.is_symlink():
             identity = path.lstat()

@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .common import run_file, UserError, human_size, qscore_integer, timestamp, write_json
-from .verification import dorado_counts, write_report
+from .verification import combine_counters, dorado_counts, write_report
 
 
 def log(root, message):
@@ -94,6 +94,8 @@ def export_alias(item, destination, config):
     alias, sources = item
     result = {'alias': alias, 'reads': 0, 'bases': 0, 'discarded_quality': 0,
               'discarded_unclassified': 0, 'native_records': 0}
+    if config.get('shards'):
+        result['by_source'] = {}
     keep_unclassified = alias != 'unclassified' or config['unclassified'] == 'keep'
     kept_sources = [path for path, passed in sources if passed and keep_unclassified]
     is_fastq = config['output'] == 'fastq'
@@ -120,6 +122,9 @@ def export_alias(item, destination, config):
             try:
                 for read, length in stream:
                     result['native_records'] += 1
+                    if 'by_source' in result:
+                        source_key = path.relative_to(destination.parent / 'tmp').parts[0]
+                        result['by_source'][source_key] = result['by_source'].get(source_key, 0) + 1
                     if result['native_records'] % 1000 == 0 and shutil.disk_usage(destination).free < config['profile'].get('minimum_free_gib', 5) * 1024**3:
                         raise RuntimeError('Workspace is nearly full; stopping export before exhausting the disk.')
                     if not passed:
@@ -170,7 +175,15 @@ def export_alias(item, destination, config):
 
 
 def export_results(root, config, native, basecaller_log, expected_raw):
-    groups = native_groups(native, config)
+    return export_parts(root, config, [(native, basecaller_log, expected_raw)])
+
+
+def export_parts(root, config, parts):
+    """parts: [(native_dir, dorado_log, expected_raw_reads)]; one part for an unsharded run."""
+    groups = defaultdict(list)
+    for native, _, _ in parts:
+        for alias, sources in native_groups(native, config).items():
+            groups[alias].extend(sources)
     destination = root / ('fastq' if config['output'] == 'fastq' else 'bam')
     destination.mkdir(exist_ok=False)
     workers = min(8, int(config['profile']['cpus']))
@@ -180,7 +193,14 @@ def export_results(root, config, native, basecaller_log, expected_raw):
     (root / 'logs').mkdir(exist_ok=True)
     write_json(root / 'logs/export_counts.json', rows)
     total = sum(row['native_records'] for row in rows)
-    counters = dorado_counts(basecaller_log.read_text(), expected_raw, total)
+    if len(parts) == 1:
+        counters = dorado_counts(parts[0][1].read_text(), parts[0][2], total)
+    else:
+        counters = []
+        for native, log_path, expected in parts:
+            written = sum(row['by_source'].get(native.relative_to(root / 'tmp').parts[0], 0) for row in rows)
+            counters.append(dorado_counts(log_path.read_text(), expected, written))
+        counters = combine_counters(counters)
     return write_report(root, config, rows, counters)
 
 
@@ -201,9 +221,131 @@ def basecaller_command(config, root, source, native):
     return args, expected
 
 
+def preflight(root, config, files=None):
+    """Check GPUs, unchanged inputs and the Dorado version. files: this part's paths, or all."""
+    wanted = set(files) if files is not None else None
+    rows = [row for row in config['probe']['files'] if wanted is None or row['path'] in wanted]
+    visible = os.environ.get('CUDA_VISIBLE_DEVICES', '').split(',')
+    if (len(visible) != config['gpus'] or len(set(visible)) != len(visible)
+            or any(not value or value == '-1' for value in visible)):
+        raise RuntimeError(f'Expected {config["gpus"]} visible GPUs, found {visible}.')
+    for row in rows:
+        stat = Path(row['path']).stat()
+        if stat.st_size != row['bytes'] or stat.st_mtime_ns != row['mtime_ns']:
+            raise RuntimeError(f'Input changed after preparation: {row["path"]}')
+    if wanted is None:
+        source = Path(config['probe']['input'])
+        current_files = {source.resolve()} if source.is_file() else {p.resolve() for p in source.rglob('*.pod5')}
+        if current_files != {Path(row['path']) for row in config['probe']['files']}:
+            raise RuntimeError('The input file list changed after preparation. Start a new preparation.')
+    for directory in ('tmp/cache', 'tmp/cuda'):
+        (root / directory).mkdir(parents=True, exist_ok=True)
+    version = subprocess.run([config['software']['executable'], '--version'], capture_output=True, text=True, check=True)
+    if config['software']['version'] not in version.stdout + version.stderr:
+        raise RuntimeError('The Dorado version changed after preparation. Prepare a new run.')
+    return visible, version.stdout + version.stderr
+
+
+def shard_main(root, config, index):
+    """One Dorado process for one part of a sharded run (a Slurm array task)."""
+    files = config['shards'][index]
+    label = f'part {index + 1}/{len(config["shards"])}'
+    expected = sum(row['reads'] for row in config['probe']['files'] if row['path'] in set(files))
+    process = None
+
+    def interrupted(signum, frame):
+        raise InterruptedError('Job interrupted')
+
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
+    try:
+        visible, version_text = preflight(root, config, files)
+        (root / 'logs').mkdir(exist_ok=True)
+        (root / f'logs/dorado-version.txt').write_text(version_text)
+        native = root / f'tmp/native_{index}'
+        if native.exists() or (root / 'fastq').exists() or (root / 'bam').exists():
+            raise RuntimeError('This part already has output. Use a new run name to preserve it.')
+        inputs = root / f'tmp/shards/{index}'
+        inputs.mkdir(parents=True)
+        for number, path in enumerate(files):
+            (inputs / f'{number:05d}_{Path(path).name}').symlink_to(path)
+        with (root / f'logs/gpus_{index}.txt').open('w') as stream:
+            subprocess.run(['nvidia-smi'], stdout=stream, stderr=subprocess.STDOUT, check=True)
+        write_json(root / f'logs/allocation_{index}.json', {'job_id': os.environ.get('SLURM_JOB_ID'),
+                   'array_task': index, 'cuda_visible_devices': visible, 'device': 'cuda:all'})
+        args, _ = basecaller_command(config, root, inputs, native)
+        write_json(root / f'logs/command_{index}.json', args)
+        reserve = config['profile'].get('minimum_free_gib', 5) * 1024**3
+        state(root, 'basecalling', f'Full run, {label}: {expected:,} raw reads in {len(files)} POD5 files, '
+              f'{config["tier"].upper()}, {config["gpus"]} GPU(s) per part.')
+        with (root / f'logs/basecaller_{index}.log').open('w') as stderr, \
+                (root / f'logs/basecaller_{index}.stdout.log').open('w') as stdout:
+            process = subprocess.Popen(args, stdout=stdout, stderr=stderr)
+            while True:
+                try:
+                    code = process.wait(timeout=15)
+                    break
+                except subprocess.TimeoutExpired:
+                    if shutil.disk_usage(root).free < reserve:
+                        process.terminate()
+                        raise RuntimeError('Workspace is nearly full; stopped before exhausting the disk.')
+        process = None
+        if code:
+            raise RuntimeError(f'Dorado exited with code {code}. See logs/basecaller_{index}.log.')
+        write_json(root / f'tmp/shard_{index}.done', {'expected_raw': expected, 'completed_at': timestamp()})
+        log(root, f'Basecalling {label} finished.')
+    except BaseException as error:
+        if process is not None:
+            process.terminate()
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        state(root, 'interrupted' if isinstance(error, (KeyboardInterrupt, InterruptedError)) else 'failed',
+              f'Stopped during basecalling {label}: {error}. Other parts may still be running; '
+              'cancel them with haplocaller cancel. Existing outputs are kept; no automatic restart.')
+        raise
+
+
+def merge_main(root, config):
+    """CPU job that runs after every part has succeeded: export, verify and clean up."""
+    count = len(config['shards'])
+    try:
+        parts = []
+        for index in range(count):
+            done = root / f'tmp/shard_{index}.done'
+            if not done.is_file():
+                raise RuntimeError(f'Part {index + 1}/{count} did not finish; nothing to merge.')
+            parts.append((root / f'tmp/native_{index}', root / f'logs/basecaller_{index}.log',
+                          json.loads(done.read_text())['expected_raw']))
+        if sum(part[2] for part in parts) != config['probe']['reads']:
+            raise RuntimeError('Part read counts do not add up to the input manifest.')
+        if (root / 'fastq').exists() or (root / 'bam').exists():
+            raise RuntimeError('This run already has output. Use a new run name to preserve it.')
+        state(root, 'exporting', f'All {count} parts finished. Creating and checking one file per sample.')
+        report = export_parts(root, config, parts)
+        state(root, 'complete',
+              f'Finished: {report["kept_reads"]:,} retained records. Results: {root/config["output"]}; counts: logs/sample_counts.tsv.')
+        from .cleanup import cleanup_run
+        try:
+            cleaned = cleanup_run(root, check_scheduler=False)
+            log(root, f'Cleanup: {cleaned["files_removed"]} files, {human_size(cleaned["bytes_removed"])}.')
+        except (OSError, ValueError, UserError) as error:
+            log(root, f'Cleanup failed: {error}. Retry with haplocaller clean {root}')
+    except BaseException as error:
+        state(root, 'failed', f'Stopped during merge: {error}. Existing outputs are kept; no automatic restart.')
+        raise
+
+
 def main():
     root = Path(sys.argv[1]).resolve(strict=True)
     config = json.loads((root / 'config/run.json').read_text())
+    role = sys.argv[2] if len(sys.argv) > 2 else ('shard' if os.environ.get('SLURM_ARRAY_TASK_ID') else 'single')
+    if role == 'shard':
+        return shard_main(root, config, int(os.environ['SLURM_ARRAY_TASK_ID']))
+    if role == 'merge':
+        return merge_main(root, config)
     process = None
     phase = 'preflight'
 
@@ -216,24 +358,9 @@ def main():
         state(root, 'checking', 'Checking inputs and the GPU allocation.')
         if not os.environ.get('SLURM_JOB_ID'):
             raise RuntimeError('The processing backend must run inside Slurm. Use haplocaller to submit it.')
-        visible = os.environ.get('CUDA_VISIBLE_DEVICES', '').split(',')
-        if (len(visible) != config['gpus'] or len(set(visible)) != len(visible)
-                or any(not value or value == '-1' for value in visible)):
-            raise RuntimeError(f'Expected {config["gpus"]} visible GPUs, found {visible}.')
-        for row in config['probe']['files']:
-            stat = Path(row['path']).stat()
-            if stat.st_size != row['bytes'] or stat.st_mtime_ns != row['mtime_ns']:
-                raise RuntimeError(f'Input changed after preparation: {row["path"]}')
+        visible, version_text = preflight(root, config)
+        (root / 'logs/dorado-version.txt').write_text(version_text)
         source = Path(config['probe']['input'])
-        current_files = {source.resolve()} if source.is_file() else {p.resolve() for p in source.rglob('*.pod5')}
-        if current_files != {Path(row['path']) for row in config['probe']['files']}:
-            raise RuntimeError('The input file list changed after preparation. Start a new preparation.')
-        for directory in ('tmp/cache', 'tmp/cuda'):
-            (root / directory).mkdir(parents=True, exist_ok=True)
-        version = subprocess.run([config['software']['executable'], '--version'], capture_output=True, text=True, check=True)
-        (root / 'logs/dorado-version.txt').write_text(version.stdout + version.stderr)
-        if config['software']['version'] not in version.stdout + version.stderr:
-            raise RuntimeError('The Dorado version changed after preparation. Prepare a new run.')
         native = root / 'tmp/native'
         if native.exists() or (root / 'fastq').exists() or (root / 'bam').exists():
             raise RuntimeError('This run already has output. Use a new run name to preserve it.')

@@ -66,8 +66,9 @@ def slurm_seconds(value):
 
 
 class Scheduler:
-    def __init__(self, job):
+    def __init__(self, job, merge=None):
         self.job = str(job) if job else None
+        self.merge = str(merge) if merge else None
         self.last_check = -float('inf')
         self.value = {}
 
@@ -75,8 +76,10 @@ class Scheduler:
         if not self.job or time.monotonic() - self.last_check < 10:
             return self.value
         self.last_check = time.monotonic()
-        if not self.job.isdigit():
+        if not self.job.isdigit() or (self.merge and not self.merge.isdigit()):
             return {'error': 'Invalid job ID in the submission record.'}
+        if self.merge:
+            return self.get_sharded()
         try:
             if shutil.which('squeue'):
                 response = subprocess.run(['squeue', '-h', '-j', self.job, '-o', '%T|%M|%N|%R'],
@@ -100,6 +103,58 @@ class Scheduler:
         except (OSError, ValueError, subprocess.TimeoutExpired):
             self.value = {'error': 'Scheduler query unavailable; showing saved run state.'}
         return self.value
+
+
+    def get_sharded(self):
+        """Combine the array of parts and the merge job into one state."""
+        jobs = self.job + ',' + self.merge
+        try:
+            rows = []
+            if shutil.which('squeue'):
+                response = subprocess.run(['squeue', '-h', '-r', '-j', jobs, '-o', '%i|%T|%M|%N|%R'],
+                                          capture_output=True, text=True, timeout=5)
+                rows = [line.split('|', 4) for line in response.stdout.strip().splitlines() if line.count('|') == 4]
+            if rows:
+                states = [row[1] for row in rows]
+                running = [row for row in rows if row[1] == 'RUNNING']
+                if running:
+                    self.value = {'state': 'RUNNING', 'elapsed': max(slurm_seconds(r[2]) or 0 for r in running),
+                                  'node': f'{len(running)} part(s) running', 'reason': '',
+                                  'pending': states.count('PENDING')}
+                else:
+                    self.value = {'state': 'PENDING', 'elapsed': None, 'node': '', 'reason': rows[0][4]}
+                return self.value
+            if shutil.which('sacct'):
+                response = subprocess.run(['sacct', '-X', '-j', jobs, '-nP', '--format=State,ExitCode,ElapsedRaw,NodeList'],
+                                          capture_output=True, text=True, timeout=5)
+                lines = [line.split('|') for line in response.stdout.strip().splitlines() if line.strip()]
+                if response.returncode == 0 and lines:
+                    states = [line[0].split()[0].rstrip('+') for line in lines]
+                    bad = [(st, line[1]) for st, line in zip(states, lines) if st in BAD_STATES]
+                    state = bad[0][0] if bad else 'COMPLETED' if all(st == 'COMPLETED' for st in states) else states[0]
+                    self.value = {'state': state, 'exit_code': bad[0][1] if bad else '0:0',
+                                  'elapsed': max(int(line[2]) for line in lines), 'node': ''}
+                    return self.value
+            self.value = {'error': 'Scheduler state unavailable; showing saved run state.'}
+        except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+            self.value = {'error': 'Scheduler query unavailable; showing saved run state.'}
+        return self.value
+
+
+def merge_counts(items):
+    """Add the summary counts of parallel parts."""
+    items = [item for item in items if item.get('available')]
+    if not items:
+        return {}
+    total = {'available': True, 'caught_up': all(item['caught_up'] for item in items),
+             'last_growth': max([item['last_growth'] for item in items if item.get('last_growth')] or [None]),
+             'aliases': {}}
+    for key in ('parents', 'records', 'passing', 'failing', 'kept', 'unclassified', 'indexed_bytes', 'summary_bytes'):
+        total[key] = sum(item.get(key, 0) for item in items)
+    for item in items:
+        for alias, number in item.get('aliases', {}).items():
+            total['aliases'][alias] = total['aliases'].get(alias, 0) + number
+    return total
 
 
 class SummaryIndex:
@@ -209,19 +264,20 @@ class Monitor:
         if not self.config or not (run_file(root, 'status.json')).is_file():
             raise UserError('This is not a run prepared by haplocaller.')
         self.submission = read_json(run_file(root, 'submission.json'))
-        self.scheduler = Scheduler(self.submission.get('job_id'))
+        self.scheduler = Scheduler(self.submission.get('job_id'), self.submission.get('merge_job_id'))
         self.index = None
+        self.parts = {}
 
     def close(self):
-        if self.index:
-            self.index.close()
+        for index in (self.index or {}).values():
+            index.close()
 
     def snapshot(self):
         cfg = self.config
         submission = read_json(run_file(self.root, 'submission.json'))
         if submission.get('job_id') != self.submission.get('job_id'):
             self.submission = submission
-            self.scheduler = Scheduler(submission.get('job_id'))
+            self.scheduler = Scheduler(submission.get('job_id'), submission.get('merge_job_id'))
             self.config = cfg = read_json(self.root / 'config/run.json')
         scheduler = self.scheduler.get()
         state = read_json(run_file(self.root, 'status.json'))
@@ -245,7 +301,10 @@ class Monitor:
         total = int(cfg['probe']['reads'])
         if cfg['mode'] == 'pilot':
             total = min(1000, total)
-        summary = self.root / 'tmp/native/sequencing_summary.txt'
+        shards = cfg.get('shards') if cfg['mode'] == 'full' and len(cfg.get('shards') or []) > 1 else None
+        summaries = ([self.root / f'tmp/native_{k}/sequencing_summary.txt' for k in range(len(shards))]
+                     if shards else [self.root / 'tmp/native/sequencing_summary.txt'])
+        summary = summaries[0]
         counts, warning = {}, ''
         if phase in FINISHED:
             counts = {'available': True, 'caught_up': True,
@@ -259,14 +318,20 @@ class Monitor:
                 with rows.open() as stream:
                     records = list(csv.DictReader(stream, delimiter='\t'))
                 counts['unclassified'] = sum(int(r['reads']) for r in records if r['alias'] == 'unclassified')
-        elif summary.is_file():
+        elif any(path.is_file() for path in summaries):
             try:
                 if self.index is None:
                     identity = str(self.root) + '|' + str(self.submission.get('job_id', cfg.get('created_at')))
                     key = hashlib.sha256(identity.encode()).hexdigest()[:24]
-                    database = Path(cfg['profile']['work_root']) / '.basecall/watch' / (key + '.sqlite3')
-                    self.index = SummaryIndex(database, cfg['unclassified'] == 'keep')
-                counts = self.index.advance(summary)
+                    self.index = {}
+                    self.database = Path(cfg['profile']['work_root']) / '.basecall/watch' / key
+                for number, path in enumerate(summaries):
+                    if path.is_file():
+                        if number not in self.index:
+                            self.index[number] = SummaryIndex(Path(str(self.database) + (f'_{number}' if shards else '') + '.sqlite3'),
+                                                              cfg['unclassified'] == 'keep')
+                        self.parts[number] = self.index[number].advance(path)
+                counts = merge_counts(list(self.parts.values())) if shards else self.parts.get(0, {})
             except (UserError, OSError, ValueError, sqlite3.Error) as error:
                 warning = 'Progress unavailable: ' + str(error)
         done = counts.get('parents', 0)
@@ -297,7 +362,8 @@ def render(data):
     lines = [ui.paint('HAPLOCALLER  /  ' + cfg['name'], 'title'),
              ui.paint(phase.replace('_', ' ').upper(), style) + '   Job ' + str(data['job'] or 'not submitted')
              + '   ' + ui.clean(data['scheduler'].get('node') or cfg['profile']['name']),
-             f'{cfg["tier"].upper()}  |  Q{cfg["min_qscore"]:g}  |  {cfg["gpus"]} GPU(s)  |  '
+             f'{cfg["tier"].upper()}  |  Q{cfg["min_qscore"]:g}  |  '
+             + (f'{len(cfg["shards"])} parts × {cfg["gpus"]} GPU(s)' if cfg['mode'] == 'full' and len(cfg.get('shards') or []) > 1 else f'{cfg["gpus"]} GPU(s)') + '  |  '
              + ('FULL DATASET' if cfg['mode'] == 'full' else 'SMALL TEST'), '']
     if counts.get('available'):
         done, total = counts['parents'], data['total']
@@ -344,7 +410,7 @@ def render(data):
     if data['warning'] or data['scheduler'].get('error'):
         lines += [ui.paint(data['warning'] or data['scheduler']['error'], 'warning')]
     if phase in STOPPED:
-        lines += ['Details: ' + str(Path(cfg['run_dir']) / 'logs/basecaller.log')]
+        lines += ['Details: ' + str(Path(cfg['run_dir']) / ('logs/basecaller_*.log' if cfg['mode'] == 'full' and len(cfg.get('shards') or []) > 1 else 'logs/basecaller.log'))]
     columns = shutil.get_terminal_size((90, 24)).columns
     latest = ui.clean(data['latest'])
     if len(latest) >= columns:
