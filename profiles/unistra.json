@@ -21,6 +21,6 @@
   "minimum_free_gib": 5,
   "cpu_partition": "public",
   "max_days": 1,
-  "default_concurrent": 12,
+  "default_parts": 12,
   "merge_time": "1-00:00:00"
 }

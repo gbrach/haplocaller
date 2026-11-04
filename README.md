@@ -128,12 +128,12 @@ The current gbrach installation is `/ssd_workspace/gbrach/.basecall/app`, with i
 
 ### Unistra: parallel parts under a 24-hour limit
 
-`publicgpu` jobs are capped at 24 h, so the Unistra profile (`max_days: 1`) splits a full run into **short GPU jobs**. The wizard asks for GPUs per job, the number of parts (default: one whole POD5 file per part, so each GPU job stays as short as possible) and how many GPU jobs may run at once (default 12, a Slurm array throttle such as `--array=0-156%12`). Files are divided into byte-balanced groups. Only basecalling uses the GPU partition. Slurm then runs:
+`publicgpu` jobs are capped at 24 h, so the Unistra profile (`max_days: 1`) splits a full run into **parallel parts**. The wizard asks for GPUs per job and the number of parts (default 12, i.e. 12 GPUs at once with 1 GPU per part; at most the number of POD5 files). Whole POD5 files are divided into byte-balanced groups. Slurm then runs:
 
 1. a GPU **job array**, one Dorado process per part, each with its own GPUs and the 24 h limit;
 2. a CPU **merge job** (`afterok` on the whole array) that concatenates each sample across parts, checks Dorado's counters for every part separately, sums them into the usual verification report, and cleans up.
 
-If any part fails, the merge job is cancelled, finished parts stay on disk, and the status shows the failure. Cancel the other parts with `haplocaller cancel`; there is no automatic resume. Short parts finish well within 24 h and backfill into free GPUs. The small test always runs as a single job. `watch` sums progress across parts. A dataset with a single huge POD5 file cannot be split by this version.
+If any part fails, the merge job is cancelled, finished parts stay on disk, and the status shows the failure. Cancel the other parts with `haplocaller cancel`; there is no automatic resume. Choose enough parts that each finishes within 24 h. The small test always runs as a single job. `watch` sums progress across parts. A dataset with a single huge POD5 file cannot be split by this version.
 
 Unistra setup needs a Python that can import `pod5` and `pysam` (set `python` with `haplocaller setup`) and a Dorado executable (the profile points at `~/Softs/dorado-2.1.1-linux-x64`). The Unistra workflow has not yet been validated end to end. IGBMC is outside the current scope.
 
