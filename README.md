@@ -2,6 +2,19 @@
 
 A guided terminal wizard for DNA basecalling with Dorado on Slurm.
 
+## Quick start (labmates)
+
+On the cluster's login node (Pangloss or Unistra):
+
+```bash
+git clone https://github.com/gbrach/haplocaller.git
+cd haplocaller
+./install.sh
+haplocaller
+```
+
+`./install.sh` takes about a minute, needs no administrator rights and no submitted job. It sets up a private Python (with `pod5` and `pysam`, fetching Python 3.12 itself if the cluster's is too old), recognises the cluster from its host name (or asks), finds your Slurm account, creates your working directory, downloads Dorado when the cluster has none, and puts the `haplocaller` command in `~/.local/bin` (it prints a one-line PATH instruction if needed). Run it again any time; it is safe. Settings are stored per account in `~/.config/basecall/profile.json`. Update later with `git pull --ff-only` in the same folder.
+
 ## Everyday use
 
 On an account where the tool has been installed:
@@ -105,22 +118,9 @@ One input must represent one sequencing run and compatible chemistry. The wizard
 
 The launcher uses Python 3.9+ and the standard library. The configured processing Python needs `pod5`, plus `pysam` for BAM output. Dorado, Slurm and an appropriate NVIDIA driver must be available on the cluster. No Snakemake installation is required.
 
-The private repository is [gbrach/haplocaller](https://github.com/gbrach/haplocaller). Labmates need repository access and their own GitHub authentication on the cluster.
+### Installation details
 
-On Pangloss, install in the account's SSD workspace:
-
-```bash
-mkdir -p "/ssd_workspace/$USER/.basecall"
-git clone git@github.com:gbrach/haplocaller.git "/ssd_workspace/$USER/.basecall/app"
-cd "/ssd_workspace/$USER/.basecall/app"
-python3 install.py
-haplocaller setup
-haplocaller
-```
-
-For an existing installation, update its Git checkout instead of cloning over it. On another cluster, use that cluster's working directory and configure it with `haplocaller setup`.
-
-The installer links `~/.local/bin/haplocaller` to `bin/haplocaller` in that folder. Keep the folder in place. It refuses to replace a different existing command and prints a PATH instruction if needed. Installation requires no administrator access and does not download Dorado or submit a job. Run `haplocaller setup` once per account to check the workspace and cluster settings; it is unnecessary when that account is already configured.
+Installation is `./install.sh` (see Quick start). Keep the cloned folder in place: the command is a link to `bin/haplocaller`, and the private environment lives in `.venv/` inside it. For an existing installation, update its Git checkout (`git pull --ff-only`) instead of cloning over it. `haplocaller setup` lets you edit the saved values (working directory, account, partition, Python, Dorado) by hand. `./install.sh --cluster unistra` forces a cluster instead of detecting it; `--no-dorado` skips the download.
 
 The current gbrach installation is `/ssd_workspace/gbrach/.basecall/app`, with its shortcut at `~/.local/bin/haplocaller`. The old `basecall` shortcut remains compatible. The Plate 3 barcode table is `/ssd_workspace/gbrach/barcodes/Candida_plate3_barcodes.csv`. Saved choices and private Dorado installations retain the existing `.basecall/` locations, so renaming the command preserves previous settings and runs.
 
@@ -135,7 +135,7 @@ The current gbrach installation is `/ssd_workspace/gbrach/.basecall/app`, with i
 
 If any part fails, the merge job is cancelled, finished parts stay on disk, and the status shows the failure. Cancel the other parts with `haplocaller cancel`; there is no automatic resume. Choose enough parts that each finishes within 24 h. The small test always runs as a single job. `watch` sums progress across parts. A dataset with a single huge POD5 file cannot be split by this version.
 
-Unistra setup needs a Python that can import `pod5` and `pysam` (set `python` with `haplocaller setup`) and a Dorado executable (the profile points at `~/Softs/dorado-2.1.1-linux-x64`). The Unistra workflow has not yet been validated end to end. IGBMC is outside the current scope.
+On Unistra, `./install.sh` provides the Python and a private Dorado under `~/haplocaller_runs/.basecall/tools`. The Unistra workflow has not yet been validated end to end. IGBMC is outside the current scope.
 
 ### Sharing and updates
 

@@ -64,7 +64,14 @@ def install(version, cache):
         with tarfile.open(archive_path) as archive:
             if not hasattr(tarfile, 'data_filter'):
                 raise UserError('This Python lacks safe archive extraction. Configure an existing Dorado executable instead.')
-            archive.extractall(temp / 'unpacked', filter='data')
+            def extraction_filter(member, destination):
+                # Dorado ships one symlink to an absolute path; everything else stays strictly confined.
+                try:
+                    return tarfile.data_filter(member, destination)
+                except tarfile.AbsoluteLinkError:
+                    return tarfile.tar_filter(member, destination)
+
+            archive.extractall(temp / 'unpacked', filter=extraction_filter)
         binaries = list((temp / 'unpacked').glob('*/bin/dorado'))
         if len(binaries) != 1:
             raise UserError('The downloaded Dorado package has an unexpected layout.')

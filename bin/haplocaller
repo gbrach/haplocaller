@@ -1,10 +1,11 @@
-#!/usr/bin/env python3
-"""Launch the guided Haplocaller workflow on a Slurm cluster."""
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from haplocaller.cli import main
-
-if __name__ == '__main__':
-    main()
+#!/bin/sh
+# Launcher: uses the private environment made by install.sh, else the python3 on PATH.
+src=$0
+while [ -L "$src" ]; do
+    dir=$(cd "$(dirname "$src")" && pwd)
+    src=$(readlink "$src")
+    case $src in /*) ;; *) src=$dir/$src ;; esac
+done
+here=$(cd "$(dirname "$src")/.." && pwd)
+if [ -x "$here/.venv/bin/python" ]; then py="$here/.venv/bin/python"; else py=python3; fi
+exec "$py" "$here/bin/haplocaller.py" "$@"

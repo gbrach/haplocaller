@@ -77,21 +77,40 @@ def path_input(label, default=None):
         ui.notice('That path was not found on this computer. Use a path on the cluster where you are running haplocaller.')
 
 
+def profile_names():
+    return sorted(p.stem for p in (PROJECT / 'profiles').glob('*.json'))
+
+
+def detect_cluster():
+    """Name of the bundled profile whose host names match this machine, else None."""
+    host = socket.getfqdn().lower()
+    matches = [n for n in profile_names()
+               if any(h in host for h in json.loads((PROJECT / 'profiles' / (n + '.json')).read_text())['hosts'])]
+    return matches[0] if len(matches) == 1 else None
+
+
 def load_profile(selection=None):
-    if selection:
-        path = Path(selection).expanduser()
+    """Bundled cluster profile plus this account's small overrides (~/.config/basecall/profile.json)."""
+    saved = json.loads(USER_PROFILE.read_text()) if USER_PROFILE.is_file() else {}
+    if selection and Path(selection).expanduser().is_file():
+        profile = json.loads(Path(selection).expanduser().read_text())
+    elif selection or 'cluster' in saved:
+        name = selection or saved['cluster']
+        path = PROJECT / 'profiles' / (name + '.json')
         if not path.is_file():
-            path = PROJECT / 'profiles' / (selection + '.json')
-    elif USER_PROFILE.is_file():
-        path = USER_PROFILE
+            raise UserError(f'Unknown cluster "{name}". Available: ' + ', '.join(profile_names()))
+        profile = json.loads(path.read_text())
+        profile['cluster'] = name
+        if not selection or saved.get('cluster') == name:
+            profile.update(saved)
+    elif saved:  # older installs stored a complete profile
+        profile = saved
     else:
-        profiles = sorted((PROJECT / 'profiles').glob('*.json'))
-        host = socket.getfqdn().lower()
-        matches = [p for p in profiles if any(h in host for h in json.loads(p.read_text())['hosts'])]
-        path = matches[0] if len(matches) == 1 else profiles[choose('Cluster', [p.stem for p in profiles])]
-    if not path.is_file():
-        raise UserError('Cluster profile not found. Use haplocaller setup.')
-    profile = json.loads(path.read_text())
+        name = detect_cluster() or profile_names()[choose('Cluster', profile_names())]
+        profile = json.loads((PROJECT / 'profiles' / (name + '.json')).read_text())
+        profile['cluster'] = name
+    if profile.get('python') in (None, 'auto'):
+        profile['python'] = sys.executable
     if profile.get('work_root'):
         profile['work_root'] = str(Path(profile['work_root'].format(user=getpass.getuser())).expanduser())
     return profile
@@ -99,21 +118,25 @@ def load_profile(selection=None):
 
 def setup(selection):
     profile = load_profile(selection)
-    ui.heading('One-time cluster setup')
-    print('Ask your cluster maintainer for these values if needed.')
+    ui.heading('Cluster setup')
+    print('Press Enter to keep a value. Ask your cluster maintainer if unsure.')
+    overrides = json.loads(USER_PROFILE.read_text()) if USER_PROFILE.is_file() else {}
+    overrides['cluster'] = profile.get('cluster', overrides.get('cluster'))
     for key, label in [('work_root', 'Working directory for GPU jobs'), ('account', 'Slurm account'),
-                       ('partition', 'GPU partition'), ('python', 'Python with pod5 installed'),
+                       ('partition', 'GPU partition'), ('python', 'Python with pod5 and pysam'),
                        ('dorado_executable', 'Dorado executable or absolute path'),
                        ('dorado_module', 'Dorado module (blank if unused)')]:
-        profile[key] = ask(label, profile.get(key) or '') or None
+        overrides[key] = ask(label, profile.get(key) or '') or None
+    if not overrides['cluster']:
+        overrides.pop('cluster')
     USER_PROFILE.parent.mkdir(parents=True, exist_ok=True)
-    write_json(USER_PROFILE, profile)
+    write_json(USER_PROFILE, overrides)
     ui.notice(f'Saved {USER_PROFILE}. Start a run with haplocaller.', 'ok')
 
 
 def check_profile(profile):
     if not profile.get('work_root') or not profile.get('dorado_executable'):
-        raise UserError(profile.get('setup_note', 'This cluster needs one-time setup.') + '\nRun haplocaller setup.')
+        raise UserError(profile.get('setup_note', 'This cluster needs one-time setup.') + '\nRun ./install.sh in the haplocaller folder (or haplocaller setup).')
     if not shutil.which('sbatch'):
         raise UserError('Slurm is not available here. Connect to the cluster first, then run haplocaller.')
     root = Path(profile['work_root'])

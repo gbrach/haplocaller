@@ -24,3 +24,4 @@ __pycache__/
 *.cram
 *.crai
 *.sam
+/.tools/
