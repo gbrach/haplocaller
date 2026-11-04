@@ -289,7 +289,10 @@ def prepare(config):
             source = Path(config['probe']['input'])
             for index, row in enumerate(config['probe']['files'], 1):
                 path = Path(row['path'])
-                relative = path.name if source.is_file() else path.relative_to(source)
+                try:
+                    relative = path.name if source.is_file() else path.relative_to(source)
+                except ValueError:  # input folder holds links to files elsewhere
+                    relative = Path(f'{index:05d}_{path.name}')
                 target = destination / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, target)
