@@ -296,7 +296,7 @@ def prepare(config):
                 target = destination / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, target)
-                row.update(path=str(target), mtime_ns=target.stat().st_mtime_ns)
+                row.update(original_path=row['path'], path=str(target), mtime_ns=target.stat().st_mtime_ns)
                 print(f'  Copied {index}/{len(config["probe"]["files"])} files', flush=True)
             config['probe']['input'] = str(destination)
         if config.get('parts', 1) > 1:

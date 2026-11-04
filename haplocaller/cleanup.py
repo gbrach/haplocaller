@@ -81,7 +81,10 @@ def _cleanup_run(root, check_scheduler):
             copy = Path(row['path']).resolve()
             if not copy.is_relative_to(staged):
                 raise UserError('Staged input manifest does not match input/; files kept.')
-            source = original if original.is_file() else original / copy.relative_to(staged)
+            if row.get('original_path'):
+                source = Path(row['original_path'])
+            else:
+                source = original if original.is_file() else original / copy.relative_to(staged)
             if (not source.is_file() or source.stat().st_size != row['bytes']
                     or source.stat().st_mtime_ns != row['mtime_ns']):
                 raise UserError(f'Original POD5 missing or changed: {source}. Staging copies kept.')
