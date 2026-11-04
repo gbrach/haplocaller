@@ -8,7 +8,7 @@
   "account": "facvie",
   "partition": "publicgpu",
   "gres": "gpu:{gpus}",
-  "constraint": "gpua100|gpuv100",
+  "constraint": "gpuh200|gpuh100|gpua100",
   "default_gpus": 1,
   "default_model": "sup",
   "default_min_qscore": 7,
