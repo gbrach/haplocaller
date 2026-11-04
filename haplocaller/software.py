@@ -29,11 +29,18 @@ def installed(profile):
 
 
 def latest_version():
-    request = urllib.request.Request('https://api.github.com/repos/nanoporetech/dorado/releases/latest',
-                                     headers={'User-Agent': 'haplocaller-lab-wizard'})
-    with urllib.request.urlopen(request, timeout=5) as response:
-        release = json.load(response)
-    version = release['tag_name'].removeprefix('v')
+    """Newest Dorado release. The API is rate-limited per IP (shared on login nodes), so fall back
+    to the release page redirect, which is not."""
+    headers = {'User-Agent': 'haplocaller-lab-wizard'}
+    try:
+        request = urllib.request.Request('https://api.github.com/repos/nanoporetech/dorado/releases/latest', headers=headers)
+        with urllib.request.urlopen(request, timeout=5) as response:
+            tag = json.load(response)['tag_name']
+    except Exception:
+        request = urllib.request.Request('https://github.com/nanoporetech/dorado/releases/latest', headers=headers)
+        with urllib.request.urlopen(request, timeout=8) as response:
+            tag = response.geturl().rstrip('/').rsplit('/', 1)[-1]
+    version = tag.removeprefix('v')
     if not re.fullmatch(r'\d+\.\d+\.\d+', version):
         raise ValueError('Unrecognised Dorado release version')
     return version

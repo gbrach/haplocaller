@@ -47,7 +47,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--bin-dir', type=Path, default=Path.home() / '.local/bin')
     parser.add_argument('--cluster', help='Cluster profile name (default: detected from this machine)')
-    parser.add_argument('--no-dorado', action='store_true', help='Do not download Dorado')
+    parser.add_argument('--dorado', choices=['ask', 'download', 'cluster', 'none'], default='ask',
+                        help="Dorado source: download a private copy, use the cluster's, or ask (default)")
+    parser.add_argument('--no-dorado', dest='dorado', action='store_const', const='none', help=argparse.SUPPRESS)
     args = parser.parse_args()
     ui.heading('HAPLOCALLER INSTALL')
     destination = link_command(args.bin_dir)
@@ -81,11 +83,16 @@ def main():
         raise UserError(f'Cannot create the working directory {work}: {error}')
     ui.notice(f'Working directory: {work}', 'ok')
 
-    if not overrides.get('dorado_executable') and not args.no_dorado:
+    if args.dorado != 'none':
         try:
             current = software.installed(profile)
-            ui.notice(f'Dorado {current["version"]} found.', 'ok')
+            ui.notice(f'Dorado {current["version"]} found on this cluster.', 'ok')
         except UserError:
+            current = None
+        download = args.dorado == 'download' or (current is None and args.dorado != 'cluster')
+        if current and args.dorado == 'ask' and sys.stdin.isatty():
+            download = cli.yes('Also download the latest Dorado as a private copy (otherwise the cluster\'s is used)?')
+        if download:
             ui.notice('Downloading Dorado (a few hundred MB)…', 'accent')
             version = software.latest_version()
             found = software.install(version, work / '.basecall/tools')
@@ -94,6 +101,8 @@ def main():
             overrides['dorado_module'] = None
             save(overrides)
             ui.notice(f'Dorado {version} installed in {work}/.basecall/tools', 'ok')
+        elif current is None:
+            ui.notice('No Dorado available; rerun ./install.sh --dorado download', 'warning')
     ui.notice('Installed.', 'ok')
     if str(destination.parent) not in os.environ.get('PATH', '').split(os.pathsep):
         print('Add this to ~/.bashrc, then open a new terminal:')
