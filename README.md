@@ -128,7 +128,7 @@ The current gbrach installation is `/ssd_workspace/gbrach/.basecall/app`, with i
 
 ### Unistra: parallel parts under a 24-hour limit
 
-`publicgpu` jobs are capped at 24 h, so the Unistra profile (`max_days: 1`) splits a full run into **parallel parts**. The wizard asks for GPUs per job and the number of parts (default 4, at most the number of POD5 files). Whole POD5 files are divided into byte-balanced groups. Slurm then runs:
+`publicgpu` jobs are capped at 24 h, so the Unistra profile (`max_days: 1`) splits a full run into **parallel parts**. The wizard asks for GPUs per job and the number of parts (default 12, i.e. 12 GPUs at once with 1 GPU per part; at most the number of POD5 files). Whole POD5 files are divided into byte-balanced groups. Slurm then runs:
 
 1. a GPU **job array**, one Dorado process per part, each with its own GPUs and the 24 h limit;
 2. a CPU **merge job** (`afterok` on the whole array) that concatenates each sample across parts, checks Dorado's counters for every part separately, sums them into the usual verification report, and cleans up.
