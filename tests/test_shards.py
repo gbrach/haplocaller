@@ -23,10 +23,11 @@ class SlurmTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             cfg = config(Path(temp))
             cfg['shards'] = [['a'], ['b'], ['c']]
+            cfg['concurrent'] = 2
             cfg['profile'].update(constraint='gpua100|gpuv100', cpu_partition='public')
             cfg['mode'] = 'full'
             args = slurm_args(cfg, 'job.sh')
-            self.assertIn('--array=0-2', args)
+            self.assertIn('--array=0-2%2', args)
             self.assertIn('--gres=gpu:tesla:2', args)
             self.assertTrue(any(a.endswith('slurm_%a.log') for a in args))
             cfg['mode'] = 'pilot'

@@ -130,7 +130,8 @@ def slurm_args(config, job_script, test_only=False, role='basecall', dependency=
                 '--gres=' + profile['gres'].format(gpus=config['gpus']),
                 '--chdir=' + str(run)]
         if sharded:
-            args += ['--array=0-' + str(len(config['shards']) - 1),
+            limit = config.get('concurrent') or 0
+            args += ['--array=0-' + str(len(config['shards']) - 1) + (f'%{limit}' if 0 < limit < len(config['shards']) else ''),
                      '--output=' + str(run / 'logs/slurm_%a.log')]
         else:
             args.append('--output=' + str(run / 'logs/slurm.log'))

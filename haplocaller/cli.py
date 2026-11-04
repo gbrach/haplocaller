@@ -160,7 +160,7 @@ def preview(config):
     ui.field('Calling', f'{config["tier"].upper()}, Dorado {config["software"]["version"]}, {config["kit"]}')
     parts = config.get('parts', 1)
     if parts > 1:
-        ui.field('Resources', f'{config["profile"]["name"]}: {parts} parallel parts × {config["gpus"]} GPU(s), then a CPU merge job')
+        ui.field('Resources', f'{config["profile"]["name"]}: {parts} GPU jobs × {config["gpus"]} GPU(s), up to {config.get("concurrent", parts)} at once, then a CPU merge job')
         ui.field('Splitting', f'whole POD5 files, balanced by size, about {human_size(config["probe"]["bytes"] / parts)} per part (small test uses one job)')
     else:
         ui.field('Resources', f'{config["profile"]["name"]}, {config["gpus"]} GPU(s) on one node')
@@ -216,17 +216,24 @@ def collect(profile, args):
             break
         ui.notice('Enter a positive number of GPUs. Slurm determines what your account can allocate on one node.')
     max_days = profile.get('max_days')
-    parts = 1
+    parts, concurrent = 1, 1
     if max_days:
         files = len(info['files'])
-        print(ui.paint(f'This cluster limits each job to {max_days} day(s). The full dataset is split into parallel parts, '
-                       'each its own job with its own GPUs, then merged. Use enough parts that each finishes in time.', 'muted'))
+        print(ui.paint(f'This cluster limits each job to {max_days} day(s). The full dataset is split into short GPU jobs '
+                       '(whole POD5 files), run in parallel, then merged on the CPU partition. More, smaller parts '
+                       'keep each GPU job short and cost little extra.', 'muted'))
         while True:
-            parts = ask('Parallel parts', min(last.get('parts', profile.get('default_parts', 4)), files))
+            parts = ask(f'Parts (1–{files}; {files} = one POD5 file per GPU job)', files)
             if parts.isdigit() and 1 <= int(parts) <= files:
                 parts = int(parts)
                 break
             ui.notice(f'Enter a whole number from 1 to {files} (parts are made of whole POD5 files).')
+        while parts > 1:
+            concurrent = ask('GPU jobs allowed to run at once', min(parts, last.get('concurrent', profile.get('default_concurrent', 12))))
+            if concurrent.isdigit() and int(concurrent) >= 1:
+                concurrent = int(concurrent)
+                break
+            ui.notice('Enter a positive whole number.')
     while True:
         days = ask('Requested runtime in days' + (' per part' if parts > 1 else ''), min(last.get('runtime_days', 14), max_days or 14))
         if days.isdigit() and int(days) >= 1 and (not max_days or int(days) <= max_days):
@@ -259,7 +266,7 @@ def collect(profile, args):
             'probe': info, 'original_input': str(source), 'mapping': mapping, 'mapping_label': tables[0]['label'],
             'mapping_source': str(table), 'mapping_sha256': hashlib.sha256(table.read_bytes()).hexdigest(),
             'tier': tier, 'kit': kit, 'output': output, 'min_qscore': qscore,
-            'unclassified': unclassified, 'gpus': gpus, 'parts': parts, 'runtime_days': days, 'software': selected_software,
+            'unclassified': unclassified, 'gpus': gpus, 'parts': parts, 'concurrent': concurrent, 'runtime_days': days, 'software': selected_software,
             'stage_input': staged, 'mode': 'pilot', 'created_at': timestamp()}
 
 
@@ -346,7 +353,7 @@ def prepare(config):
         write_json(cache / 'last_choices.json', {'input': config.get('original_input', config['probe']['input']),
                    'table': config.get('mapping_source'), 'tier': config['tier'], 'output': config['output'],
                    'min_qscore': config['min_qscore'], 'unclassified': config['unclassified'], 'gpus': config['gpus'],
-                   'runtime_days': config.get('runtime_days', 14), 'parts': config.get('parts', 1), 'run': str(run)})
+                   'runtime_days': config.get('runtime_days', 14), 'parts': config.get('parts', 1), 'concurrent': config.get('concurrent', 1), 'run': str(run)})
         ui.notice(f'Prepared {run}', 'ok')
         return run
     except BaseException:
