@@ -5,6 +5,7 @@
     "hpc-n"
   ],
   "work_root": "~/haplocaller_runs",
+  "input_policy": "any",
   "account": "facvie",
   "partition": "publicgpu",
   "gres": "gpu:{gpus}",

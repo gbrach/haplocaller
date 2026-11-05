@@ -15,11 +15,11 @@ else
     done
     rm -rf .venv
     if [ -n "$PY" ]; then
-        say "Creating the Python environment with $PY (about a minute)…"
+        say "Creating the Python environment with $PY (about a minute)..."
         "$PY" -m venv .venv
         .venv/bin/python -m pip install -q pod5 pysam
     else
-        say "This system's Python is older than 3.9; fetching a private Python (about a minute)…"
+        say "This system's Python is older than 3.9; fetching a private Python (about a minute)..."
         case "$(uname -m)" in x86_64|amd64) arch=x86_64 ;; aarch64|arm64) arch=aarch64 ;; *) echo "Unsupported CPU type" >&2; exit 1 ;; esac
         mkdir -p .tools
         curl -fsSL "https://github.com/astral-sh/uv/releases/latest/download/uv-${arch}-unknown-linux-gnu.tar.gz" | tar -xz -C .tools --strip-components=1

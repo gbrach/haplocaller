@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from . import software, ui
-from .common import plan_shards, run_file, UserError, command, human_size, mapping_tables, qscore_integer, slurm_args, timestamp, valid_alias, write_json
+from .common import plan_shards, run_file, state_dir, UserError, command, human_size, mapping_tables, qscore_integer, slurm_args, timestamp, valid_alias, write_json
 from .verification import revalidated
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -145,7 +145,7 @@ def check_profile(profile):
 
 
 def read_input(profile, source):
-    ui.notice('Checking POD5 files and run metadata…', 'accent')
+    ui.notice('Checking POD5 files and run metadata...', 'accent')
     result = command([profile['python'], str(PROJECT / 'haplocaller/probe.py'), str(source)],
                      stdout=subprocess.PIPE)
     if result.returncode:
@@ -153,9 +153,23 @@ def read_input(profile, source):
     return json.loads(result.stdout)
 
 
+def require_workspace_input(profile, info):
+    """Clusters with a fast GPU workspace read POD5s only from there; never copy them."""
+    if profile.get('input_policy') != 'workspace':
+        return
+    root = Path(profile['work_root']).resolve()
+    outside = [row['path'] for row in info['files'] if not Path(row['path']).resolve().is_relative_to(root)]
+    if outside:
+        raise UserError(
+            f'{len(outside)} of {len(info["files"])} POD5 files are outside the GPU workspace {root}, for example:\n'
+            f'  {outside[0]}\n'
+            'Haplocaller does not copy raw data. Move the POD5s into the workspace yourself (once), '
+            'then run haplocaller again and give that path. Links to files elsewhere do not count.')
+
+
 def select_software(profile, skip_check):
     selected_profile = profile
-    preference = Path(profile['work_root']) / '.basecall/software.json'
+    preference = state_dir(profile) / 'software.json'
     if preference.is_file():
         saved = json.loads(preference.read_text())
         if Path(saved.get('executable', '')).is_file():
@@ -193,20 +207,19 @@ def preview(config):
     ext, folder = ('fastq.gz', 'fastq') if config['output'] == 'fastq' else ('bam', 'bam')
     ui.field('Results', f'{config["run_dir"]}/{folder}/<sample>.{ext}')
     ui.field('Counts / log', f'{config["run_dir"]}/logs/sample_counts.tsv and logs/run.log')
-    if config['stage_input']:
-        ui.field('Preparation', f'copy {human_size(config["probe"]["bytes"])} of POD5s into the GPU working directory')
     ui.field('POD5 export', 'none')
     print(ui.paint('  Small test: up to 1,000 raw reads. Full mode: the entire input.', 'muted'))
 
 
 def collect(profile, args):
     check_profile(profile)
-    previous = Path(profile['work_root']) / '.basecall/last_choices.json'
+    previous = state_dir(profile) / 'last_choices.json'
     last = json.loads(previous.read_text()) if previous.is_file() else {}
     ui.heading(f'HAPLOCALLER  /  {profile["name"]}')
     print(ui.paint('Tab completes paths. Enter accepts the highlighted default. Ctrl+C exits.\n', 'muted'))
     source = path_input('POD5 file or folder', last.get('input'))
     info = read_input(profile, source)
+    require_workspace_input(profile, info)
     ui.notice(f'Found {info["reads"]:,} reads; {human_size(info["bytes"])}; kit {info["kit"]}.', 'ok')
     while True:
         table = path_input('Barcode table (.csv or .tsv)', last.get('table'))
@@ -277,23 +290,21 @@ def collect(profile, args):
         result = command([profile['python'], '-c', 'import pysam'], capture_output=True)
         if result.returncode:
             raise UserError('BAM output needs pysam in the cluster Python. Ask the profile maintainer to install it once, or select FASTQ.gz.')
-    staged = not all(Path(row['path']).is_relative_to(root) for row in info['files'])
     return {'schema_version': 1, 'name': name, 'run_dir': str(root / name), 'profile': profile,
             'probe': info, 'original_input': str(source), 'mapping': mapping, 'mapping_label': tables[0]['label'],
             'mapping_source': str(table), 'mapping_sha256': hashlib.sha256(table.read_bytes()).hexdigest(),
             'tier': tier, 'kit': kit, 'output': output, 'min_qscore': qscore,
             'unclassified': unclassified, 'gpus': gpus, 'parts': parts, 'runtime_days': days, 'software': selected_software,
-            'stage_input': staged, 'mode': 'pilot', 'created_at': timestamp()}
+            'stage_input': False, 'mode': 'pilot', 'created_at': timestamp()}
 
 
 def prepare(config):
     run = Path(config['run_dir'])
     profile = config['profile']
     free = shutil.disk_usage(profile['work_root']).free
-    needed = config['probe']['bytes'] if config['stage_input'] else 0
     reserve = profile.get('minimum_free_gib', 5) * 1024**3
-    if free < needed + reserve:
-        raise UserError(f'Not enough free working space: {human_size(free)} available, {human_size(needed + reserve)} needed for staging and reserve.')
+    if free < reserve:
+        raise UserError(f'Not enough free working space: {human_size(free)} available, {human_size(reserve)} needed as reserve.')
     run.mkdir(exist_ok=False)
     for folder in ('config', 'logs', 'tmp', 'code'):
         (run / folder).mkdir()
@@ -305,23 +316,6 @@ def prepare(config):
             writer = csv.DictWriter(stream, fieldnames=['barcode', 'alias'], delimiter='\t')
             writer.writeheader()
             writer.writerows(config['mapping'])
-        if config['stage_input']:
-            print('Copying POD5 input to the GPU workspace…', flush=True)
-            destination = run / 'input'
-            destination.mkdir()
-            source = Path(config['probe']['input'])
-            for index, row in enumerate(config['probe']['files'], 1):
-                path = Path(row['path'])
-                try:
-                    relative = path.name if source.is_file() else path.relative_to(source)
-                except ValueError:  # input folder holds links to files elsewhere
-                    relative = Path(f'{index:05d}_{path.name}')
-                target = destination / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(path, target)
-                row.update(original_path=row['path'], path=str(target), mtime_ns=target.stat().st_mtime_ns)
-                print(f'  Copied {index}/{len(config["probe"]["files"])} files', flush=True)
-            config['probe']['input'] = str(destination)
         if config.get('parts', 1) > 1:
             config['shards'] = plan_shards(config['probe']['files'], config['parts'])
         with (run / 'config/sample_sheet.csv').open('w', newline='') as stream:
@@ -329,12 +323,12 @@ def prepare(config):
             writer.writerow(['kit', 'experiment_id', 'flow_cell_id', 'barcode', 'alias'])
             for row in config['mapping']:
                 writer.writerow([config['kit'], config['probe']['experiment'], config['probe']['flowcell'], row['barcode'], row['alias']])
-        cache = Path(profile['work_root']) / '.basecall'
+        cache = state_dir(profile)
         if config['software'].get('install_version'):
-            print(f'Installing the requested Dorado {config["software"]["install_version"]}…', flush=True)
+            print(f'Installing the requested Dorado {config["software"]["install_version"]}...', flush=True)
             config['software'] = software.install(config['software']['install_version'], cache / 'tools')
             write_json(cache / 'software.json', config['software'])
-        print(f'Preparing the matching {config["tier"].upper()} model…', flush=True)
+        print(f'Preparing the matching {config["tier"].upper()} model...', flush=True)
         model_dir = run / 'models'
         model_dir.mkdir()
         environment = dict(os.environ, TMPDIR=str(run / 'tmp'), XDG_CACHE_HOME=str(run / 'tmp/cache'))
@@ -480,7 +474,7 @@ def main():
         if args.command:
             if args.run is None:
                 profile = load_profile(args.profile)
-                previous = Path(profile.get('work_root') or '') / '.basecall/last_choices.json'
+                previous = state_dir(profile) / 'last_choices.json'
                 saved = json.loads(previous.read_text()) if previous.is_file() else {}
                 if not saved.get('run'):
                     raise UserError('No recent run found. Supply its folder: haplocaller ' + args.command + ' /path/to/run')

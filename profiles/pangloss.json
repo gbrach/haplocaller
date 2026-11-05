@@ -4,6 +4,7 @@
   "work_root": "/ssd_workspace/{user}",
   "account": "viseg",
   "partition": "gpu",
+  "input_policy": "workspace",
   "gres": "gpu:tesla:{gpus}",
   "constraint": null,
   "default_gpus": 2,

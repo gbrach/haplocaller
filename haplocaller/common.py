@@ -1,6 +1,7 @@
 import csv
 import datetime as dt
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -30,6 +31,15 @@ def write_json(path, data):
         json.dump(data, stream, indent=2)
         stream.write('\n')
     temporary.replace(path)
+
+
+def state_dir(profile):
+    """Private Dorado, saved choices and the progress cache. Kept outside the runs folder, so
+    clearing out old runs cannot delete the tools. An existing <work_root>/.basecall is still used."""
+    legacy = Path(profile.get('work_root') or '') / '.basecall'
+    if profile.get('work_root') and legacy.is_dir():
+        return legacy
+    return Path(os.environ.get('HAPLOCALLER_HOME') or Path.home() / '.local/share/haplocaller')
 
 
 def human_size(value):

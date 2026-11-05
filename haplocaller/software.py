@@ -15,7 +15,10 @@ def installed(profile):
     if not executable:
         raise UserError('Dorado has not been configured for this cluster. Run haplocaller setup once with your cluster maintainer.')
     module = profile.get('dorado_module')
-    result = command([executable, '--version'], module, capture_output=True)
+    try:
+        result = command([executable, '--version'], module, capture_output=True)
+    except OSError as error:
+        raise UserError(f'Dorado is not at {executable} ({error.strerror or error}).')
     versions = re.findall(r'(?m)^(\d+\.\d+\.\d+(?:\+[^\s]+)?)\s*$', result.stdout + '\n' + result.stderr)
     if result.returncode or not versions:
         raise UserError('Dorado could not start. Check the cluster profile with haplocaller setup.\n' + result.stderr[-1000:])

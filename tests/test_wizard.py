@@ -217,5 +217,36 @@ class SubmissionTests(unittest.TestCase):
                 submit.assert_not_called()
 
 
+class WorkspaceInputTest(unittest.TestCase):
+    def check(self, policy, *paths):
+        files = [{'path': str(path)} for path in paths]
+        cli.require_workspace_input({'input_policy': policy, 'work_root': str(self.work)}, {'files': files})
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name).resolve()
+        self.work, self.other = base / 'workspace', base / 'elsewhere'
+        self.work.mkdir()
+        self.other.mkdir()
+        (self.work / 'a.pod5').write_bytes(b'x')
+        (self.other / 'b.pod5').write_bytes(b'x')
+        (self.work / 'link.pod5').symlink_to(self.other / 'b.pod5')
+
+    def test_inside_workspace_is_accepted(self):
+        self.check('workspace', self.work / 'a.pod5')
+
+    def test_outside_workspace_stops(self):
+        with self.assertRaises(UserError):
+            self.check('workspace', self.work / 'a.pod5', self.other / 'b.pod5')
+
+    def test_link_into_workspace_does_not_count(self):
+        with self.assertRaises(UserError):
+            self.check('workspace', self.work / 'link.pod5')
+
+    def test_other_clusters_read_in_place(self):
+        self.check('any', self.other / 'b.pod5')
+
+
 if __name__ == '__main__':
     unittest.main()

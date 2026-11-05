@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from . import ui
-from .common import run_file, UserError, human_size
+from .common import run_file, state_dir, UserError, human_size
 from .verification import revalidated
 
 BAD_STATES = {'FAILED', 'CANCELLED', 'TIMEOUT', 'OUT_OF_MEMORY', 'NODE_FAIL',
@@ -324,7 +324,7 @@ class Monitor:
                     identity = str(self.root) + '|' + str(self.submission.get('job_id', cfg.get('created_at')))
                     key = hashlib.sha256(identity.encode()).hexdigest()[:24]
                     self.index = {}
-                    self.database = Path(cfg['profile']['work_root']) / '.basecall/watch' / key
+                    self.database = state_dir(cfg['profile']) / 'watch' / key
                 for number, path in enumerate(summaries):
                     if path.is_file():
                         if number not in self.index:
@@ -414,7 +414,7 @@ def render(data):
     columns = shutil.get_terminal_size((90, 24)).columns
     latest = ui.clean(data['latest'])
     if len(latest) >= columns:
-        latest = latest[:max(10, columns - 4)] + '…'
+        latest = latest[:max(10, columns - 6)] + '...'
     lines += ['', ui.paint(latest, 'muted')]
     return '\n'.join(lines)
 

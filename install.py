@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from haplocaller import cli, software, ui  # noqa: E402
-from haplocaller.common import UserError, write_json  # noqa: E402
+from haplocaller.common import UserError, state_dir, write_json  # noqa: E402
 
 
 def link_command(bin_dir):
@@ -77,6 +77,7 @@ def main():
 
     profile = cli.load_profile()
     work = Path(profile['work_root'])
+    state = state_dir(profile)
     try:
         work.mkdir(parents=True, exist_ok=True)
     except OSError as error:
@@ -93,14 +94,14 @@ def main():
         if current and args.dorado == 'ask' and sys.stdin.isatty():
             download = cli.yes('Also download the latest Dorado as a private copy (otherwise the cluster\'s is used)?')
         if download:
-            ui.notice('Downloading Dorado (a few hundred MB)…', 'accent')
+            ui.notice('Downloading Dorado (a few hundred MB)...', 'accent')
             version = software.latest_version()
-            found = software.install(version, work / '.basecall/tools')
-            write_json(work / '.basecall/software.json', found)
+            found = software.install(version, state / 'tools')
+            write_json(state / 'software.json', found)
             overrides['dorado_executable'] = found['executable']
             overrides['dorado_module'] = None
             save(overrides)
-            ui.notice(f'Dorado {version} installed in {work}/.basecall/tools', 'ok')
+            ui.notice(f'Dorado {version} installed in {state}/tools', 'ok')
         elif current is None:
             ui.notice('No Dorado available; rerun ./install.sh --dorado download', 'warning')
     ui.notice('Installed.', 'ok')
