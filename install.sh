@@ -14,17 +14,22 @@ else
         fi
     done
     rm -rf .venv
-    if [ -n "$PY" ]; then
-        say "Creating the Python environment with $PY (about a minute)..."
+    fetch_uv() {
+        case "$(uname -m)" in x86_64|amd64) arch=x86_64 ;; aarch64|arm64) arch=aarch64 ;; *) return 1 ;; esac
+        mkdir -p .tools
+        curl -fsSL "https://github.com/astral-sh/uv/releases/latest/download/uv-${arch}-unknown-linux-gnu.tar.gz" | tar -xz -C .tools --strip-components=1
+    }
+    # uv builds the environment without ensurepip (missing on Debian) and can fetch Python itself.
+    if [ -x .tools/uv ] || fetch_uv; then
+        say "Creating the Python environment with uv (about a minute)..."
+        if [ -n "$PY" ]; then .tools/uv venv -q --python "$PY" .venv; else .tools/uv venv -q --python 3.12 .venv; fi
+        .tools/uv pip install -q --python .venv/bin/python pod5 pysam
+    elif [ -n "$PY" ]; then
+        say "Could not download uv; using $PY with pip instead..."
         "$PY" -m venv .venv
         .venv/bin/python -m pip install -q pod5 pysam
     else
-        say "This system's Python is older than 3.9; fetching a private Python (about a minute)..."
-        case "$(uname -m)" in x86_64|amd64) arch=x86_64 ;; aarch64|arm64) arch=aarch64 ;; *) echo "Unsupported CPU type" >&2; exit 1 ;; esac
-        mkdir -p .tools
-        curl -fsSL "https://github.com/astral-sh/uv/releases/latest/download/uv-${arch}-unknown-linux-gnu.tar.gz" | tar -xz -C .tools --strip-components=1
-        .tools/uv venv -q --python 3.12 .venv
-        .tools/uv pip install -q --python .venv/bin/python pod5 pysam
+        echo "No usable Python (3.9 or newer) and uv could not be downloaded from GitHub." >&2; exit 1
     fi
 fi
 exec .venv/bin/python install.py "$@"
