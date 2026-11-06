@@ -500,7 +500,7 @@ def main():
     parser.add_argument('--no-color', dest='color', action='store_const', const='never', help='Disable terminal colour')
     parser.add_argument('--once', action='store_true', help='watch: display one progress snapshot')
     parser.add_argument('--interval', type=float, default=3, help='watch: screen refresh in seconds (default: 3)')
-    parser.add_argument('command', nargs='?', choices=['setup', 'status', 'watch', 'logs', 'start', 'cancel', 'clean'])
+    parser.add_argument('command', nargs='?', choices=['setup', 'status', 'watch', 'logs', 'start', 'clean'])
     parser.add_argument('run', nargs='?', type=Path)
     args = parser.parse_args()
     ui.MODE = args.color
@@ -544,12 +544,6 @@ def main():
                 action = choose('Next action', ['Leave prepared; submit nothing', 'Submit small test (up to 1,000 reads)', 'Submit full dataset'])
                 if action:
                     submit(run, 'pilot' if action == 1 else 'full')
-            elif args.command == 'cancel':
-                record = json.loads((run_file(run, 'submission.json')).read_text())
-                jobs = [record['job_id']] + ([record['merge_job_id']] if record.get('merge_job_id') else [])
-                if yes(f'Cancel Slurm job {" and ".join(jobs)}?'):
-                    command(['scancel', *jobs], check=True)
-                    print('Cancellation requested. Check with haplocaller status.')
             return
         from . import update
         if update.offer(yes, lambda text: ui.notice(text, 'ok'), args.no_update_check):

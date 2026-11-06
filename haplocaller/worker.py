@@ -450,7 +450,7 @@ def shard_main(root, config, index):
                 process.wait()
         state(root, 'interrupted' if isinstance(error, (KeyboardInterrupt, InterruptedError)) else 'failed',
               f'Stopped during basecalling {label}: {error}. Other parts may still be running; '
-              'cancel them with haplocaller cancel. Existing outputs are kept; no automatic restart.')
+              'cancel them with scancel (haplocaller status shows the job IDs). Existing outputs are kept; no automatic restart.')
         raise
 
 

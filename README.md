@@ -46,12 +46,11 @@ Worked examples for each cluster, with paths and answers: [docs/examples.md](doc
 haplocaller status   # state of the latest run
 haplocaller watch    # live progress; Ctrl+C leaves the job running
 haplocaller logs     # follow the log
-haplocaller cancel   # cancel the Slurm job
 haplocaller clean    # keep only results, logs and config of a verified run
 haplocaller setup    # edit saved cluster settings
 ```
 
-Each command also accepts a run folder.
+Each command also accepts a run folder. To stop a job, use Slurm's `scancel <job id>`; `haplocaller status` shows the job ID.
 
 ## Results
 
