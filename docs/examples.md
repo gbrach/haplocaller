@@ -48,11 +48,12 @@ Results land in `~/haplocaller_runs/<run name>/fastq/`. Slurm account `facvie`, 
 
 ## IGBMC (phantom)
 
-*Not yet tested: the profile exists but nobody has run an install or a job there.*
+*Install tested (including the private Dorado download); no job has been run here yet.*
 
-Log in to the phantom login node, then:
+Log in, then:
 
 ```bash
+ssh <you>@hpc.igbmc.fr
 haplocaller
 ```
 

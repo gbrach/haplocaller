@@ -38,7 +38,12 @@ else
     # uv builds the environment without ensurepip (missing on Debian) and can fetch Python itself.
     if [ -x .tools/uv ] || fetch_uv; then
         say "Creating the Python environment with uv (about a minute)..."
-        if [ -n "$PY" ]; then .tools/uv venv -q --python "$PY" .venv; else .tools/uv venv -q --python 3.12 .venv; fi
+        # Python 3.11 before 3.11.4 (Debian 12) cannot safely unpack the Dorado download, so use 3.12 or newer.
+        if [ -n "$PY" ] && "$PY" -c 'import sys; sys.exit(sys.version_info < (3, 12))' 2>/dev/null; then
+            .tools/uv venv -q --python "$PY" .venv
+        else
+            .tools/uv venv -q --python 3.12 .venv
+        fi
         .tools/uv pip install -q --python .venv/bin/python pod5 pysam
     elif [ -n "$PY" ]; then
         say "Could not download uv; using $PY with pip instead..."
