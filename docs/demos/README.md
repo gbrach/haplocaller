@@ -9,3 +9,5 @@ asciinema rec -c 'bash demo-unistra.sh' unistra.cast
 
 Each script pauses between steps and types nothing for you: it prints the step, then you run it.
 The small test submits one GPU job of at most 1,000 reads. Do not record a full run.
+
+Log in with `ssh <you>@pangloss.ibmp.unistra.fr` or `ssh <you>@hpc-login.u-strasbg.fr` first. `asciinema` was not installed when these were written, and nothing has been recorded yet.

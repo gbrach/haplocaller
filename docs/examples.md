@@ -8,21 +8,21 @@ barcode01,strain_A
 barcode02,strain_B
 ```
 
-Replace every path below with your own. Install first (see the [README](../README.md)).
+Replace `<you>` and every path with your own. The Pangloss paths are real ones from the Candida plate 3 run; the Unistra and IGBMC paths are placeholders. Install first (see the [README](../README.md)).
 
 ## Pangloss
 
 Your data must already be under `/ssd_workspace/<you>`. POD5s are never copied.
 
 ```bash
-ssh pangloss
+ssh <you>@pangloss.ibmp.unistra.fr
 haplocaller
 ```
 
 | Question | Answer |
 | --- | --- |
-| POD5 file or folder | `/ssd_workspace/<you>/my_pod5` |
-| Barcode table | `/ssd_workspace/<you>/barcodes/plate3.csv` |
+| POD5 file or folder | `/ssd_workspace/<you>/candida_pod5` |
+| Barcode table | `/ssd_workspace/<you>/barcodes/Candida_plate3_barcodes.csv` |
 | Model / kit / format | SUP, `SQK-NBD114-96`, FASTQ.gz |
 | Minimum Q score, GPUs, days | 7, 2, 14 |
 
@@ -33,7 +33,7 @@ Results land in `/ssd_workspace/<you>/<run name>/fastq/`. Slurm account `viseg`,
 Jobs are limited to 24 h, so a full run is split into parallel parts (12 by default) and merged.
 
 ```bash
-ssh unistra
+ssh <you>@hpc-login.u-strasbg.fr
 haplocaller
 ```
 
@@ -48,8 +48,11 @@ Results land in `~/haplocaller_runs/<run name>/fastq/`. Slurm account `facvie`, 
 
 ## IGBMC (phantom)
 
+*Not yet tested: the profile exists but nobody has run an install or a job there.*
+
+Log in to the phantom login node, then:
+
 ```bash
-ssh phantom
 haplocaller
 ```
 

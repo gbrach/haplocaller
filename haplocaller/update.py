@@ -33,16 +33,23 @@ def check(repo=None, stamp=None, now=None):
             return 0
         if _git('diff', '--quiet', 'HEAD', cwd=repo).returncode:
             return 0  # tracked files were edited here; never touch them
-        if _git('fetch', '-q', timeout=15, cwd=repo).returncode:
-            return 0  # offline or no access: try again next time
         stamp.parent.mkdir(parents=True, exist_ok=True)
-        stamp.touch()
+        stamp.touch()  # also when offline, so a blocked network costs one wait per day, not one per start
+        if _git('fetch', '-q', timeout=15, cwd=repo).returncode:
+            return 0
         ahead = _git('rev-list', '--count', 'HEAD..@{u}', cwd=repo)
         diverged = _git('rev-list', '--count', '@{u}..HEAD', cwd=repo)
         if ahead.returncode or diverged.returncode or int(diverged.stdout) > 0:
             return 0
         return int(ahead.stdout)
-    except (OSError, subprocess.TimeoutExpired, ValueError):
+    except subprocess.TimeoutExpired:
+        try:
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            stamp.touch()
+        except OSError:
+            pass
+        return 0
+    except (OSError, ValueError):
         return 0
 
 

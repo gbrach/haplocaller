@@ -44,7 +44,7 @@ class UpdateTest(unittest.TestCase):
     def test_offline_is_silent(self):
         git(self.work, 'remote', 'set-url', 'origin', str(self.tmp / 'missing.git'))
         self.assertEqual(update.check(self.work, self.stamp), 0)
-        self.assertFalse(self.stamp.exists())
+        self.assertTrue(self.stamp.exists())  # not asked again until tomorrow
 
 
 if __name__ == '__main__':
