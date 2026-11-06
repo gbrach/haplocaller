@@ -12,7 +12,13 @@ cd haplocaller
 ./install.sh
 ```
 
-The installer uses [uv](https://github.com/astral-sh/uv) for the Python environment, detects the cluster, finds your Slurm account, and downloads Dorado if needed. It needs no admin rights. Keep the cloned folder in place. Update with `git pull --ff-only`.
+The installer uses [uv](https://github.com/astral-sh/uv) for the Python environment, detects the cluster, finds your Slurm account, and downloads Dorado if needed. It needs no admin rights. Keep the cloned folder in place.
+
+If uv is not installed, the installer downloads a pinned, checksum-verified copy into `.tools/` inside the clone (nothing goes to your home directory). It was tested from scratch on Pangloss and Unistra.
+
+### Updates
+
+Once a day, when you start `haplocaller`, it checks GitHub. If there is a newer version it asks `Update now? [y/N]`, then restarts on the new version. It stays silent when you are offline, have edited the program files, or have already been asked today. Skip it with `--no-update-check`, or update by hand with `git pull --ff-only`.
 
 ## Use
 
@@ -31,6 +37,8 @@ The wizard asks for:
 Then choose: prepare only (default), a small test of up to 1,000 reads, or the full dataset. A test never launches the full run by itself.
 
 On Unistra, jobs are limited to 24 h, so a full run is split into parallel parts, then merged.
+
+Worked examples for each cluster, with paths and answers: [docs/examples.md](docs/examples.md). Terminal demo scripts: [docs/demos](docs/demos).
 
 ## Commands
 
