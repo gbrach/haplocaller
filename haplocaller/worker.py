@@ -7,11 +7,12 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .common import run_file, UserError, human_size, qscore_integer, timestamp, write_json
+from .common import native_format, outputs, run_file, UserError, human_size, qscore_integer, timestamp, write_json
 from .verification import combine_counters, dorado_counts, write_report
 
 
@@ -46,7 +47,7 @@ def fastq_records(path):
 
 def native_groups(native, config):
     groups = defaultdict(list)
-    prefix = 'fastq' if config['output'] == 'fastq' else 'bam'
+    prefix = native_format(config)
     allowed = {row['alias'] for row in config['mapping']} | {'unclassified'}
     for path in sorted(native.rglob('*')):
         if not path.is_file():
@@ -90,29 +91,58 @@ def merge_header(paths):
     return header
 
 
-def export_alias(item, destination, config):
+SUFFIX = {'fastq': '.fastq.gz', 'bam': '.bam'}
+
+
+def fastq_text(read):
+    return f'@{read.query_name}\n{read.query_sequence or ""}\n+\n{read.qual or ""}\n'.encode()
+
+
+def parent_id(read):
+    return read.get_tag('pi') if read.has_tag('pi') else read.query_name
+
+
+def check_fastq(path, alias):
+    verified = 0
+    with gzip.open(path, 'rb') as stream:  # partial names need an explicit gzip reader
+        while True:
+            header = stream.readline()
+            if not header:
+                break
+            sequence, plus, quality = stream.readline(), stream.readline(), stream.readline()
+            if (not header.startswith(b'@') or not plus.startswith(b'+') or not quality.endswith(b'\n')
+                    or len(sequence.rstrip(b'\r\n')) != len(quality.rstrip(b'\r\n'))):
+                raise ValueError(f'Invalid exported FASTQ for {alias}')
+            verified += 1
+    return verified
+
+
+def export_alias(item, root, config):
+    """One sample: write every requested format from a single pass over its native records.
+    Returns (counts, parent raw-read IDs seen for this sample)."""
     alias, sources = item
+    kinds, native = outputs(config), native_format(config)
     result = {'alias': alias, 'reads': 0, 'bases': 0, 'discarded_quality': 0,
               'discarded_unclassified': 0, 'native_records': 0}
+    parents = set()
     if config.get('shards'):
         result['by_source'] = {}
     keep_unclassified = alias != 'unclassified' or config['unclassified'] == 'keep'
     kept_sources = [path for path, passed in sources if passed and keep_unclassified]
-    is_fastq = config['output'] == 'fastq'
-    output = destination / (alias + ('.fastq.gz' if is_fastq else '.bam'))
-    partial = output.with_name(output.name + '.partial')
-    writer = None
-    raw_output = None
+    finals = {kind: root / kind / (alias + SUFFIX[kind]) for kind in kinds}
+    partials = {kind: path.with_name(path.name + '.partial') for kind, path in finals.items()}
+    writers, raw_files = {}, {}
     try:
         if kept_sources:
-            if is_fastq:
-                raw_output = partial.open('xb')
-                writer = gzip.GzipFile(filename='', fileobj=raw_output, mode='wb', compresslevel=1, mtime=0)
-            else:
-                import pysam
-                writer = pysam.AlignmentFile(str(partial), 'wb', header=merge_header(kept_sources))
+            for kind in kinds:
+                if kind == 'fastq':
+                    raw_files[kind] = partials[kind].open('xb')
+                    writers[kind] = gzip.GzipFile(filename='', fileobj=raw_files[kind], mode='wb', compresslevel=1, mtime=0)
+                else:
+                    import pysam
+                    writers[kind] = pysam.AlignmentFile(str(partials[kind]), 'wb', header=merge_header(kept_sources))
         for path, passed in sources:
-            if is_fastq:
+            if native == 'fastq':
                 stream = fastq_records(path)
                 closer = None
             else:
@@ -122,56 +152,49 @@ def export_alias(item, destination, config):
             try:
                 for read, length in stream:
                     result['native_records'] += 1
+                    if config.get('pod5'):
+                        parents.add(uuid.UUID(parent_id(read)).bytes)
                     if 'by_source' in result:
-                        source_key = path.relative_to(destination.parent / 'tmp').parts[0]
+                        source_key = path.relative_to(root / 'tmp').parts[0]
                         result['by_source'][source_key] = result['by_source'].get(source_key, 0) + 1
-                    if result['native_records'] % 1000 == 0 and shutil.disk_usage(destination).free < config['profile'].get('minimum_free_gib', 5) * 1024**3:
+                    if result['native_records'] % 1000 == 0 and shutil.disk_usage(root).free < config['profile'].get('minimum_free_gib', 5) * 1024**3:
                         raise RuntimeError('Workspace is nearly full; stopping export before exhausting the disk.')
                     if not passed:
                         result['discarded_quality'] += 1
                     elif not keep_unclassified:
                         result['discarded_unclassified'] += 1
                     else:
-                        writer.write(read)
+                        for kind, writer in writers.items():
+                            writer.write(fastq_text(read) if kind == 'fastq' and native == 'bam' else read)
                         result['reads'] += 1
                         result['bases'] += length
             finally:
                 if closer is not None:
                     closer.close()
-        if writer is not None:
-            writer.close()
-            writer = None
-            if raw_output:
-                raw_output.close()
-                raw_output = None
-            # Check the complete output before making the final name visible.
-            if is_fastq:
-                # Gzip detection uses the suffix; partial names need an explicit reader.
-                verified = 0
-                with gzip.open(partial, 'rb') as stream:
-                    while True:
-                        header = stream.readline()
-                        if not header:
-                            break
-                        sequence, plus, quality = stream.readline(), stream.readline(), stream.readline()
-                        if (not header.startswith(b'@') or not plus.startswith(b'+') or not quality.endswith(b'\n')
-                                or len(sequence.rstrip(b'\r\n')) != len(quality.rstrip(b'\r\n'))):
-                            raise ValueError(f'Invalid exported FASTQ for {alias}')
-                        verified += 1
-            else:
-                import pysam
-                with pysam.AlignmentFile(str(partial), 'rb', check_sq=False) as stream:
-                    stream.check_truncation()
-                    verified = sum(1 for _ in stream)
-            if verified != result['reads']:
-                raise ValueError(f'Exported read count mismatch for {alias}')
-            partial.rename(output)
+        if writers:
+            for kind in list(writers):
+                writers.pop(kind).close()
+                if kind in raw_files:
+                    raw_files.pop(kind).close()
+            # Check every complete output before any final name becomes visible.
+            for kind in kinds:
+                if kind == 'fastq':
+                    verified = check_fastq(partials[kind], alias)
+                else:
+                    import pysam
+                    with pysam.AlignmentFile(str(partials[kind]), 'rb', check_sq=False) as stream:
+                        stream.check_truncation()
+                        verified = sum(1 for _ in stream)
+                if verified != result['reads']:
+                    raise ValueError(f'Exported read count mismatch for {alias} ({kind})')
+            for kind in kinds:
+                partials[kind].rename(finals[kind])
     finally:
-        if writer is not None:
+        for writer in writers.values():
             writer.close()
-        if raw_output is not None:
-            raw_output.close()
-    return result
+        for stream in raw_files.values():
+            stream.close()
+    return result, parents
 
 
 def export_results(root, config, native, basecaller_log, expected_raw):
@@ -184,11 +207,12 @@ def export_parts(root, config, parts):
     for native, _, _ in parts:
         for alias, sources in native_groups(native, config).items():
             groups[alias].extend(sources)
-    destination = root / ('fastq' if config['output'] == 'fastq' else 'bam')
-    destination.mkdir(exist_ok=False)
+    for kind in outputs(config):
+        (root / kind).mkdir(exist_ok=False)
     workers = min(8, int(config['profile']['cpus']))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        rows = list(pool.map(lambda item: export_alias(item, destination, config), groups.items()))
+        exported = list(pool.map(lambda item: export_alias(item, root, config), groups.items()))
+    rows = [row for row, _ in exported]
     # Preserve completed per-sample verification even if global accounting fails.
     (root / 'logs').mkdir(exist_ok=True)
     write_json(root / 'logs/export_counts.json', rows)
@@ -201,7 +225,90 @@ def export_parts(root, config, parts):
             written = sum(row['by_source'].get(native.relative_to(root / 'tmp').parts[0], 0) for row in rows)
             counters.append(dorado_counts(log_path.read_text(), expected, written))
         counters = combine_counters(counters)
-    return write_report(root, config, rows, counters)
+    report = write_report(root, config, rows, counters)
+    if config.get('pod5'):
+        # Last, so that a full disk here cannot cost the finished, verified basecalls.
+        routes = {row['alias']: found for row, found in exported}
+        try:
+            report['pod5'] = export_pod5(root, config, routes)
+            log(root, f'POD5 export: {report["pod5"]["reads"]:,} raw reads in {report["pod5"]["files"]} files.')
+        except Exception as error:
+            shutil.rmtree(root / 'pod5', ignore_errors=True)
+            report['pod5'] = {'status': 'failed', 'error': str(error)}
+            log(root, f'POD5 export FAILED, partial files removed; the basecalls are complete and verified: {error}')
+        except BaseException:
+            shutil.rmtree(root / 'pod5', ignore_errors=True)
+            raise
+        write_json(run_file(root, 'verification.json'), report)
+    return report
+
+
+def raw_signature(record):
+    """A 16-byte digest of the raw signal and read metadata; compared before and after copying."""
+    import hashlib
+    digest = hashlib.sha256(record.signal.tobytes())
+    for value in (record.num_samples, record.read_number, record.start_sample, record.pore,
+                  record.calibration, record.end_reason, record.median_before, record.run_info):
+        digest.update(repr(value).encode())
+    return int.from_bytes(digest.digest()[:16], 'big')
+
+
+def export_pod5(root, config, routes):
+    """Write one POD5 per sample holding the raw signal of every read assigned to it, whatever its Q score.
+    Reads with calls in two samples go to _ambiguous.pod5, reads without any call to _uncalled.pod5.
+    A small test only archives the reads it actually basecalled."""
+    import pod5
+    destinations = {}
+    for alias, found in routes.items():
+        for parent in found:
+            previous = destinations.setdefault(parent, alias)
+            if previous != alias:
+                destinations[parent] = '_ambiguous'
+    full = config['mode'] != 'pilot'
+    folder = root / 'pod5'
+    folder.mkdir(exist_ok=False)
+    reserve = config['profile'].get('minimum_free_gib', 5) * 1024**3
+    written = {}
+    writers = {}
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        seen = 0
+        for row in config['probe']['files']:
+            with pod5.Reader(Path(row['path'])) as reader:
+                for record in reader.reads():
+                    key = record.read_id.bytes
+                    name = destinations.get(key, '_uncalled' if full else None)
+                    if name is None:
+                        continue
+                    if name not in writers:
+                        writers[name] = stack.enter_context(pod5.Writer(folder / (name + '.pod5.partial')))
+                    writers[name].add_read(record.to_read())
+                    count, total = written.get(name, (0, 0))
+                    written[name] = (count + 1, (total + raw_signature(record)) % (1 << 128))
+                    seen += 1
+                    if seen % 1000 == 0 and shutil.disk_usage(root).free < reserve:
+                        raise RuntimeError('Workspace is nearly full; stopped the POD5 export before exhausting the disk.')
+    # Reopen everything that was written and compare it with what was meant to be written.
+    for name, (count, total) in written.items():
+        check_count, check_total = 0, 0
+        with pod5.Reader(folder / (name + '.pod5.partial')) as reader:
+            for record in reader.reads():
+                expected = destinations.get(record.read_id.bytes, '_uncalled')
+                if expected != name:
+                    raise ValueError(f'Raw read in the wrong POD5 file: {name}')
+                check_count += 1
+                check_total = (check_total + raw_signature(record)) % (1 << 128)
+        if (check_count, check_total) != (count, total):
+            raise ValueError(f'POD5 file {name}.pod5 does not match the input signals.')
+    for name in written:
+        (folder / (name + '.pod5.partial')).rename(folder / (name + '.pod5'))
+    reads = sum(count for count, _ in written.values())
+    if full and reads != config['probe']['reads']:
+        raise ValueError(f'POD5 export holds {reads:,} reads but the input has {config["probe"]["reads"]:,}.')
+    return {'status': 'passed', 'files': len(written), 'reads': reads,
+            'bytes': sum(p.stat().st_size for p in folder.glob('*.pod5')),
+            'uncalled': written.get('_uncalled', (0, 0))[0], 'ambiguous': written.get('_ambiguous', (0, 0))[0],
+            'policy': 'all reads, including those below the Q-score threshold'}
 
 
 def basecaller_command(config, root, source, native):
@@ -210,7 +317,7 @@ def basecaller_command(config, root, source, native):
             '--sample-sheet', str(root / 'config/sample_sheet.csv'),
             '--min-qscore', str(qscore_integer(config['min_qscore'])),
             '--output-dir', str(native), '--emit-summary']
-    if config['output'] == 'fastq':
+    if native_format(config) == 'fastq':
         args.append('--emit-fastq')
     expected = config['probe']['reads']
     if config['mode'] == 'pilot':
@@ -326,7 +433,7 @@ def merge_main(root, config):
         state(root, 'exporting', f'All {count} parts finished. Creating and checking one file per sample.')
         report = export_parts(root, config, parts)
         state(root, 'complete',
-              f'Finished: {report["kept_reads"]:,} retained records. Results: {root/config["output"]}; counts: logs/sample_counts.tsv.')
+              f'Finished: {report["kept_reads"]:,} retained records. Results: {", ".join(str(root / kind) for kind in outputs(config))}; counts: logs/sample_counts.tsv.')
         from .cleanup import cleanup_run
         try:
             cleaned = cleanup_run(root, check_scheduler=False)
@@ -400,7 +507,7 @@ def main():
         report = export_results(root, config, native, root / 'logs/basecaller.log', expected)
         phase = 'complete'
         state(root, 'pilot_complete' if config['mode'] == 'pilot' else 'complete',
-              f'Finished: {report["kept_reads"]:,} retained records. Results: {root/config["output"]}; counts: logs/sample_counts.tsv.')
+              f'Finished: {report["kept_reads"]:,} retained records. Results: {", ".join(str(root / kind) for kind in outputs(config))}; counts: logs/sample_counts.tsv.')
         from .cleanup import cleanup_run
         try:
             cleaned = cleanup_run(root, check_scheduler=False)

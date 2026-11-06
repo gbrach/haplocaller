@@ -28,10 +28,10 @@ haplocaller
 
 The wizard asks for:
 
-1. A POD5 file or folder on the cluster. On Pangloss it must already be in your `/ssd_workspace` folder. POD5s are never copied.
+1. A POD5 file or folder on the cluster. On Pangloss it must already be in your `/ssd_workspace` folder. Input POD5s are never copied.
 2. A CSV/TSV barcode table with `barcode` and `alias` columns.
-3. The model (FAST, HAC or SUP), the barcode kit and the output format (FASTQ.gz or BAM).
-4. Minimum Q score, number of GPUs and runtime.
+3. The model (FAST, HAC or SUP), the barcode kit and the basecall files: FASTQ.gz (default), BAM, or both.
+4. Minimum Q score (default 7), unclassified reads (default: keep), and whether to also export demultiplexed POD5 (default: yes), then GPUs and runtime. These defaults are proposed fresh for every run.
 5. A run name.
 
 Then choose: prepare only (default), a small test of up to 1,000 reads, or the full dataset. A test never launches the full run by itself.
@@ -57,15 +57,21 @@ Each command also accepts a run folder.
 
 ```text
 <work dir>/<run name>/
-├── fastq/ (or bam/)   one file per sample, plus unclassified
+├── fastq/ and/or bam/ one file per sample, plus unclassified
+├── pod5/              raw signal per sample (unless you answered n)
 ├── config/            sample sheet, settings, versions
 └── logs/              counts, verification report
 ```
 
+### Demultiplexed POD5 uses a lot of disk
+
+The POD5 export writes a new copy of every raw signal, about as large as the whole input, **on top of** the basecalls. The wizard shows a red warning with the real numbers (input size against free space) and the review screen repeats it. It keeps all reads, including those below the Q-score threshold, so the data can be re-basecalled later. Reads called in two samples go to `_ambiguous.pod5`, reads with no call to `_uncalled.pod5`. A small test only archives the reads it basecalled.
+
+It runs last. If it fails (for example, disk full), its partial files are removed and the verified FASTQ/BAM stay; `logs/verification.json` records `pod5: failed`.
+
 ## Limits
 
 - A failed run is kept and must be redone under a new name. There is no resume.
-- Raw POD5 files are not demultiplexed.
 - Multiple nodes are not supported.
 
 Tests: `python3 -m unittest discover -s tests -v`
