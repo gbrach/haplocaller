@@ -94,8 +94,22 @@ def merge_header(paths):
 SUFFIX = {'fastq': '.fastq.gz', 'bam': '.bam'}
 
 
+ARRAY_TYPE = {'b': 'c', 'B': 'C', 'h': 's', 'H': 'S', 'i': 'i', 'I': 'I', 'f': 'f'}
+
+
+def sam_tag(tag, value, kind):
+    if kind == 'B':
+        return f'{tag}:B:{ARRAY_TYPE[value.typecode]},' + ','.join(f'{x:g}' if value.typecode == 'f' else str(x) for x in value)
+    if kind == 'f':
+        return f'{tag}:f:{value:g}'
+    kind = 'i' if kind in 'cCsSiI' else kind
+    return f'{tag}:{kind}:{value}'
+
+
 def fastq_text(read):
-    return f'@{read.query_name}\n{read.query_sequence or ""}\n+\n{read.qual or ""}\n'.encode()
+    """The record as Dorado's own FASTQ writes it: '@id', then the SAM-style tags, tab separated."""
+    header = '\t'.join(['@' + read.query_name] + [sam_tag(*item) for item in read.get_tags(with_value_type=True)])
+    return f'{header}\n{read.query_sequence or ""}\n+\n{read.qual or ""}\n'.encode()
 
 
 def parent_id(read):
@@ -197,6 +211,17 @@ def export_alias(item, root, config):
     return result, parents
 
 
+def finished_message(root, config, report):
+    text = (f'Finished: {report["kept_reads"]:,} retained records. Results: '
+            f'{", ".join(str(root / kind) for kind in outputs(config))}; counts: logs/sample_counts.tsv.')
+    pod5 = report.get('pod5')
+    if pod5 and pod5.get('status') == 'passed':
+        text += f' Demultiplexed POD5: {pod5["reads"]:,} raw reads in {root / "pod5"}.'
+    elif pod5:
+        text += f' POD5 EXPORT FAILED ({pod5.get("error")}); partial files removed. The basecalls above are complete.'
+    return text
+
+
 def export_results(root, config, native, basecaller_log, expected_raw):
     return export_parts(root, config, [(native, basecaller_log, expected_raw)])
 
@@ -229,6 +254,7 @@ def export_parts(root, config, parts):
     if config.get('pod5'):
         # Last, so that a full disk here cannot cost the finished, verified basecalls.
         routes = {row['alias']: found for row, found in exported}
+        state(root, 'exporting', 'Basecalls are final and verified. Now writing the demultiplexed POD5; this can take hours.')
         try:
             report['pod5'] = export_pod5(root, config, routes)
             log(root, f'POD5 export: {report["pod5"]["reads"]:,} raw reads in {report["pod5"]["files"]} files.')
@@ -272,10 +298,12 @@ def export_pod5(root, config, routes):
     writers = {}
     from contextlib import ExitStack
     with ExitStack() as stack:
-        seen = 0
+        seen = done_files = 0
         for row in config['probe']['files']:
             with pod5.Reader(Path(row['path'])) as reader:
                 for record in reader.reads():
+                    if not full and seen >= len(destinations):
+                        break  # a small test has everything it needs
                     key = record.read_id.bytes
                     name = destinations.get(key, '_uncalled' if full else None)
                     if name is None:
@@ -288,6 +316,11 @@ def export_pod5(root, config, routes):
                     seen += 1
                     if seen % 1000 == 0 and shutil.disk_usage(root).free < reserve:
                         raise RuntimeError('Workspace is nearly full; stopped the POD5 export before exhausting the disk.')
+            done_files += 1
+            log(root, f'POD5 export: input file {done_files}/{len(config["probe"]["files"])} done, {seen:,} raw reads written.')
+            if not full and seen >= len(destinations):
+                break
+    log(root, 'POD5 export: checking the written files against the input signals.')
     # Reopen everything that was written and compare it with what was meant to be written.
     for name, (count, total) in written.items():
         check_count, check_total = 0, 0
@@ -432,8 +465,7 @@ def merge_main(root, config):
             raise RuntimeError('This run already has output. Use a new run name to preserve it.')
         state(root, 'exporting', f'All {count} parts finished. Creating and checking one file per sample.')
         report = export_parts(root, config, parts)
-        state(root, 'complete',
-              f'Finished: {report["kept_reads"]:,} retained records. Results: {", ".join(str(root / kind) for kind in outputs(config))}; counts: logs/sample_counts.tsv.')
+        state(root, 'complete', finished_message(root, config, report))
         from .cleanup import cleanup_run
         try:
             cleaned = cleanup_run(root, check_scheduler=False)
@@ -506,8 +538,7 @@ def main():
         state(root, phase, 'Basecalling finished. Creating and checking one file per sample.')
         report = export_results(root, config, native, root / 'logs/basecaller.log', expected)
         phase = 'complete'
-        state(root, 'pilot_complete' if config['mode'] == 'pilot' else 'complete',
-              f'Finished: {report["kept_reads"]:,} retained records. Results: {", ".join(str(root / kind) for kind in outputs(config))}; counts: logs/sample_counts.tsv.')
+        state(root, 'pilot_complete' if config['mode'] == 'pilot' else 'complete', finished_message(root, config, report))
         from .cleanup import cleanup_run
         try:
             cleaned = cleanup_run(root, check_scheduler=False)

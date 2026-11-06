@@ -233,8 +233,8 @@ def pod5_warning(profile, info, header=True):
     fits = need <= free * 0.9
     lines = ['WARNING: DISK SPACE',
              f'Demultiplexed POD5 re-writes every raw signal: about {human_size(need)} of NEW files',
-             f'(the input is {human_size(need)}; free space on {profile["work_root"]} is {human_size(free)}).',
-             'It is written last, after the basecalls are finished and checked.']
+             f'(the input is {human_size(need)}; free space on {profile["work_root"]} is {human_size(free)}), plus a few percent for the basecalls.',
+             f'It is written last, after the basecalls are checked, and takes roughly {max(1, round(need / 140e9))} h extra (about 1 h per 140 GB).']
     lines.append('THIS DOES NOT FIT. Free up space, or answer n.' if not fits
                  else 'Answer n if you only need FASTQ/BAM and do not need to keep the raw signal.')
     width = max(len(line) for line in lines) + 4
