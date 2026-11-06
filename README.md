@@ -12,13 +12,7 @@ cd haplocaller
 ./install.sh
 ```
 
-The installer uses [uv](https://github.com/astral-sh/uv) for the Python environment, detects the cluster, finds your Slurm account, and downloads Dorado if needed. It needs no admin rights. Keep the cloned folder in place.
-
-If uv is not installed, the installer downloads a pinned, checksum-verified copy into `.tools/` inside the clone (nothing goes to your home directory). It was tested from scratch on Pangloss and Unistra.
-
-### Updates
-
-Once a day, when you start `haplocaller`, it checks GitHub. If there is a newer version it asks `Update now? [y/N]`, then restarts on the new version. It stays silent when you are offline, have edited the program files, or have already been asked today. Skip it with `--no-update-check`, or update by hand with `git pull --ff-only`.
+No admin rights needed. Keep the folder in place. Once a day, `haplocaller` offers to update itself.
 
 ## Use
 
@@ -26,52 +20,34 @@ Once a day, when you start `haplocaller`, it checks GitHub. If there is a newer 
 haplocaller
 ```
 
-The wizard asks for:
+The wizard asks for your POD5 folder, a CSV/TSV barcode table (`barcode`, `alias`), and a few options. Defaults: Q7, FASTQ.gz, unclassified reads kept, demultiplexed POD5 on. Then choose to prepare only, run a small test (up to 1,000 reads), or run everything.
 
-1. A POD5 file or folder on the cluster. On Pangloss it must already be in your `/ssd_workspace` folder. Input POD5s are never copied.
-2. A CSV/TSV barcode table with `barcode` and `alias` columns.
-3. The model (FAST, HAC or SUP), the barcode kit and the basecall files: FASTQ.gz (default), BAM, or both.
-4. Minimum Q score (default 7), unclassified reads (default: keep), and whether to also export demultiplexed POD5 (default: yes), then GPUs and runtime. These defaults are proposed fresh for every run.
-5. A run name.
+POD5 export copies all raw signal, so it needs about as much free disk as your input. The wizard warns you in red.
 
-Then choose: prepare only (default), a small test of up to 1,000 reads, or the full dataset. A test never launches the full run by itself.
-
-On Unistra, jobs are limited to 24 h, so a full run is split into parallel parts, then merged.
-
-Worked examples for each cluster, with paths and answers: [docs/examples.md](docs/examples.md). Terminal demo scripts: [docs/demos](docs/demos).
+Examples per cluster: [docs/examples.md](docs/examples.md)
 
 ## Commands
 
 ```bash
 haplocaller status   # state of the latest run
-haplocaller watch    # live progress; Ctrl+C leaves the job running
+haplocaller watch    # live progress (Ctrl+C leaves the job running)
 haplocaller logs     # follow the log
-haplocaller clean    # keep only results, logs and config of a verified run
-haplocaller setup    # edit saved cluster settings
+haplocaller clean    # keep only results, logs and config
 ```
 
-Each command also accepts a run folder. To stop a job, use Slurm's `scancel <job id>`; `haplocaller status` shows the job ID.
+Stop a job with `scancel <job id>`.
 
 ## Results
 
 ```text
 <work dir>/<run name>/
-├── fastq/ and/or bam/ one file per sample, plus unclassified
-├── pod5/              raw signal per sample (unless you answered n)
-├── config/            sample sheet, settings, versions
-└── logs/              counts, verification report
+├── fastq/ and/or bam/   one file per sample
+├── pod5/                raw signal per sample
+├── config/              settings
+└── logs/                counts, verification
 ```
-
-### Demultiplexed POD5 uses a lot of disk
-
-The POD5 export writes a new copy of every raw signal, about as large as the whole input, **on top of** the basecalls. The wizard shows a red warning with the real numbers (input size against free space) and the review screen repeats it. It keeps all reads, including those below the Q-score threshold, so the data can be re-basecalled later. Reads called in two samples go to `_ambiguous.pod5`, reads with no call to `_uncalled.pod5`. A small test only archives the reads it basecalled.
-
-It runs last. If it fails (for example, disk full), its partial files are removed and the verified FASTQ/BAM stay; `logs/verification.json` records `pod5: failed`.
 
 ## Limits
 
-- When FASTQ.gz is made from BAM (any run that also writes BAM or POD5), its read headers carry `qs`, `ch`, `st` and `RG` only. Dorado's own FASTQ also lists the GPU and trim tags. Sequences and qualities are identical.
-- A failed run is kept and must be redone under a new name. There is no resume.
-- Multiple nodes are not supported.
-
-Tests: `python3 -m unittest discover -s tests -v`
+- A failed run must be redone under a new name. There is no resume.
+- One node per job.
