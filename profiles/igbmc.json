@@ -1,5 +1,6 @@
 {
   "name": "IGBMC",
+  "disabled": "Hidden until GPU partition access is granted; delete this line to enable.",
   "hosts": ["phantom", "igbmc"],
   "work_root": "/shared/mendel/projects/ONTcaal/{user}",
   "account": "schacherer",

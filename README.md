@@ -1,6 +1,6 @@
 # Haplocaller
 
-A guided terminal wizard for Dorado basecalling on Slurm clusters (Pangloss, Unistra, IGBMC).
+A guided terminal wizard for Dorado basecalling on Slurm clusters (Pangloss, Unistra).
 
 ## Install
 

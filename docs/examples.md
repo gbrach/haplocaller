@@ -1,6 +1,6 @@
 # Examples by cluster
 
-All three use the same barcode table: a CSV or TSV with `barcode` and `alias` columns.
+Both use the same barcode table: a CSV or TSV with `barcode` and `alias` columns.
 
 ```text
 barcode,alias
@@ -8,7 +8,7 @@ barcode01,strain_A
 barcode02,strain_B
 ```
 
-Replace `<you>` and every path with your own. The Pangloss paths are real ones from the Candida plate 3 run; the Unistra and IGBMC paths are placeholders. Install first (see the [README](../README.md)).
+Replace `<you>` and every path with your own. The Pangloss paths are real ones from the Candida plate 3 run; the Unistra paths are placeholders. Install first (see the [README](../README.md)).
 
 ## Pangloss
 
@@ -45,26 +45,6 @@ haplocaller
 | Minimum Q score, GPUs per part | 7, 1 |
 
 Results land in `~/haplocaller_runs/<run name>/fastq/`. Slurm account `facvie`, partition `publicgpu`. No Dorado module exists here, so install with `./install.sh --dorado download`.
-
-## IGBMC (phantom)
-
-*Install tested (including the private Dorado download); no job has been run here yet.*
-
-Log in, then:
-
-```bash
-ssh <you>@hpc.igbmc.fr
-haplocaller
-```
-
-| Question | Answer |
-| --- | --- |
-| POD5 file or folder | any folder you can read |
-| Barcode table | a CSV or TSV on the cluster |
-| Model / kit / format | SUP, `SQK-NBD114-96`, FASTQ.gz |
-| Minimum Q score, GPUs, days | 7, 1, up to 8 |
-
-Results land in `/shared/mendel/projects/ONTcaal/<you>/<run name>/fastq/`. Slurm account `schacherer`, partition `gpu`.
 
 ## After the wizard
 

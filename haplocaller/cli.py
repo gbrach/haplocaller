@@ -78,7 +78,12 @@ def path_input(label, default=None):
 
 
 def profile_names():
-    return sorted(p.stem for p in (PROJECT / 'profiles').glob('*.json'))
+    return sorted(p.stem for p in (PROJECT / 'profiles').glob('*.json') if not _disabled(p.stem))
+
+
+def _disabled(name):
+    """A bundled profile with a "disabled" entry is hidden: not listed, not detected."""
+    return json.loads((PROJECT / 'profiles' / (name + '.json')).read_text()).get('disabled')
 
 
 def detect_cluster():
