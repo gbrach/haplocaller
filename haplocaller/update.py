@@ -20,36 +20,28 @@ def _stamp_path():
 
 def check(repo=None, stamp=None, now=None):
     """Return the number of new commits on the tracked branch, or 0 when nothing applies.
-    Quiet on every failure: offline, not a git clone, detached head, no upstream, local changes, checked today."""
+    Fetches at most once a day. Quiet on every failure: offline, not a git clone, detached head, no upstream, local changes."""
     repo = Path(repo or PROJECT)
     stamp = Path(stamp or _stamp_path())
     now = time.time() if now is None else now
     try:
         if not (repo / '.git').exists():
             return 0
-        if stamp.is_file() and now - stamp.stat().st_mtime < INTERVAL:
-            return 0
         if _git('symbolic-ref', '-q', 'HEAD', cwd=repo).returncode or _git('rev-parse', '@{u}', cwd=repo).returncode:
             return 0
         if _git('diff', '--quiet', 'HEAD', cwd=repo).returncode:
             return 0  # tracked files were edited here; never touch them
-        stamp.parent.mkdir(parents=True, exist_ok=True)
-        stamp.touch()  # also when offline, so a blocked network costs one wait per day, not one per start
-        if _git('fetch', '-q', timeout=15, cwd=repo).returncode:
-            return 0
+        if not stamp.is_file() or now - stamp.stat().st_mtime >= INTERVAL:
+            # Only the network fetch is limited to once a day; a known update keeps being offered.
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            stamp.touch()  # also when offline, so a blocked network costs one wait per day
+            _git('fetch', '-q', timeout=15, cwd=repo)
         ahead = _git('rev-list', '--count', 'HEAD..@{u}', cwd=repo)
         diverged = _git('rev-list', '--count', '@{u}..HEAD', cwd=repo)
         if ahead.returncode or diverged.returncode or int(diverged.stdout) > 0:
             return 0
         return int(ahead.stdout)
-    except subprocess.TimeoutExpired:
-        try:
-            stamp.parent.mkdir(parents=True, exist_ok=True)
-            stamp.touch()
-        except OSError:
-            pass
-        return 0
-    except (OSError, ValueError):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return 0
 
 

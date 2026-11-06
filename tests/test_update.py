@@ -29,9 +29,10 @@ class UpdateTest(unittest.TestCase):
         self.assertTrue(update.apply(self.work))
         self.assertEqual((self.work / 'a.txt').read_text(), '2')
 
-    def test_checked_today_is_silent(self):
+    def test_declined_update_is_offered_again_without_a_new_fetch(self):
         self.assertEqual(update.check(self.work, self.stamp), 1)
-        self.assertEqual(update.check(self.work, self.stamp), 0)
+        git(self.work, 'remote', 'set-url', 'origin', str(self.tmp / 'missing.git'))  # a second fetch would fail
+        self.assertEqual(update.check(self.work, self.stamp), 1)
 
     def test_dirty_tree_is_left_alone(self):
         (self.work / 'a.txt').write_text('mine')
@@ -44,7 +45,7 @@ class UpdateTest(unittest.TestCase):
     def test_offline_is_silent(self):
         git(self.work, 'remote', 'set-url', 'origin', str(self.tmp / 'missing.git'))
         self.assertEqual(update.check(self.work, self.stamp), 0)
-        self.assertTrue(self.stamp.exists())  # not asked again until tomorrow
+        self.assertTrue(self.stamp.exists())  # no new fetch attempt until tomorrow
 
 
 if __name__ == '__main__':
