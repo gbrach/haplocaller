@@ -106,9 +106,15 @@ def sam_tag(tag, value, kind):
     return f'{tag}:{kind}:{value}'
 
 
+FASTQ_TAGS = ('qs', 'ch', 'st', 'RG')
+
+
 def fastq_text(read):
-    """The record as Dorado's own FASTQ writes it: '@id', then the SAM-style tags, tab separated."""
-    header = '\t'.join(['@' + read.query_name] + [sam_tag(*item) for item in read.get_tags(with_value_type=True)])
+    """FASTQ record made from a BAM record. Dorado's own FASTQ also lists the GPU and trim tags, which the BAM
+    does not hold; the four tags written here have exactly the same values as in Dorado's FASTQ."""
+    tags = [sam_tag(tag, value, kind) for tag, value, kind in read.get_tags(with_value_type=True) if tag in FASTQ_TAGS]
+    tags.sort(key=lambda text: FASTQ_TAGS.index(text[:2]))
+    header = '\t'.join(['@' + read.query_name] + tags)
     return f'{header}\n{read.query_sequence or ""}\n+\n{read.qual or ""}\n'.encode()
 
 

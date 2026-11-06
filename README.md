@@ -71,6 +71,7 @@ It runs last. If it fails (for example, disk full), its partial files are remove
 
 ## Limits
 
+- When FASTQ.gz is made from BAM (any run that also writes BAM or POD5), its read headers carry `qs`, `ch`, `st` and `RG` only. Dorado's own FASTQ also lists the GPU and trim tags. Sequences and qualities are identical.
 - A failed run is kept and must be redone under a new name. There is no resume.
 - Multiple nodes are not supported.
 

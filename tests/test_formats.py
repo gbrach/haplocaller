@@ -112,16 +112,16 @@ class BothFormatsAndPod5Tests(unittest.TestCase):
             self.assertTrue((root / 'pod5/sample_A.pod5').is_file())
             self.assertFalse((root / 'tmp').exists())
 
-    def test_fastq_header_carries_the_bam_tags_like_dorados_own(self):
+    def test_fastq_header_keeps_the_tags_shared_with_dorados_own(self):
         header = pysam.AlignmentHeader.from_dict({'HD': {'VN': '1.6'}, 'SQ': []})
         record = pysam.AlignedSegment(header)
         record.query_name = 'abc'
         record.query_sequence = 'ACGT'
         record.query_qualities = pysam.qualitystring_to_array('IIII')
-        record.set_tags([('qs', 10.6263, 'f'), ('ch', 870, 'i'), ('st', '2026-08-28T11:52:52.499000+00:00', 'Z')])
+        record.set_tags([('qs', 10.6263, 'f'), ('ch', 870, 'i'), ('st', '2026-08-28T11:52:52.499000+00:00', 'Z'), ('mx', 3, 'i'), ('RG', 'run_model', 'Z')])
         from haplocaller.worker import fastq_text
         self.assertEqual(fastq_text(record).decode(),
-                         '@abc\tqs:f:10.6263\tch:i:870\tst:Z:2026-08-28T11:52:52.499000+00:00\nACGT\n+\nIIII\n')
+                         '@abc\tqs:f:10.6263\tch:i:870\tst:Z:2026-08-28T11:52:52.499000+00:00\tRG:Z:run_model\nACGT\n+\nIIII\n')
 
     def test_pilot_archives_only_basecalled_reads(self):
         with tempfile.TemporaryDirectory() as temp:
