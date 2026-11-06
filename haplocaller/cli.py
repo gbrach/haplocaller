@@ -454,7 +454,7 @@ def main():
     parser = argparse.ArgumentParser(prog='haplocaller', description='Guided nanopore basecalling on Slurm. Run on the cluster without arguments to start the wizard.')
     parser.add_argument('--profile', help='Cluster name or custom profile JSON')
     parser.add_argument('--prepare-only', action='store_true', help='Prepare files and model, never submit')
-    parser.add_argument('--no-update-check', action='store_true', help='Use the installed Dorado without checking for updates')
+    parser.add_argument('--no-update-check', action='store_true', help='Do not check for updates to Haplocaller or Dorado')
     parser.add_argument('--color', choices=['auto', 'always', 'never'], default='auto', help='Terminal colour (default: auto)')
     parser.add_argument('--no-color', dest='color', action='store_const', const='never', help='Disable terminal colour')
     parser.add_argument('--once', action='store_true', help='watch: display one progress snapshot')
@@ -510,6 +510,9 @@ def main():
                     command(['scancel', *jobs], check=True)
                     print('Cancellation requested. Check with haplocaller status.')
             return
+        from . import update
+        if update.offer(yes, lambda text: ui.notice(text, 'ok'), args.no_update_check):
+            os.execv(sys.executable, [sys.executable, *sys.argv])
         config = collect(load_profile(args.profile), args)
         preview(config)
         action = 0 if args.prepare_only else choose('Next action',
