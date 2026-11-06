@@ -14,11 +14,27 @@ else
         fi
     done
     rm -rf .venv
+    # Pinned uv release (static musl build, so it runs on old clusters); the download is checked before use.
+    UV_VERSION=0.13.7
     fetch_uv() {
-        case "$(uname -m)" in x86_64|amd64) arch=x86_64 ;; aarch64|arm64) arch=aarch64 ;; *) return 1 ;; esac
+        case "$(uname -m)" in
+            x86_64|amd64) arch=x86_64; sum=287491da03f2a785c70fa75b13e1f849918c2f2b5415fe84876b8214eeb792f9 ;;
+            aarch64|arm64) arch=aarch64; sum=2d3ec076a0c4c0e8250bb6418c44080828b544f1a3be0b6e46adf9fb6923de45 ;;
+            *) return 1 ;;
+        esac
         mkdir -p .tools
-        curl -fsSL "https://github.com/astral-sh/uv/releases/latest/download/uv-${arch}-unknown-linux-gnu.tar.gz" | tar -xz -C .tools --strip-components=1
+        tmp=$(mktemp -d .tools/dl.XXXXXX)
+        file="$tmp/uv.tar.gz"
+        if curl -fsSL -o "$file" "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${arch}-unknown-linux-musl.tar.gz" \
+            && printf '%s  %s\n' "$sum" "$file" | { sha256sum -c --status 2>/dev/null || shasum -a 256 -c --status 2>/dev/null; } \
+            && tar -xz -C .tools --strip-components=1 -f "$file"; then
+            rm -rf "$tmp"
+        else
+            rm -rf "$tmp"; return 1
+        fi
     }
+    # Keep uv's cache and any Python it downloads inside this folder, not in the quota-limited home directory.
+    export UV_CACHE_DIR="$PWD/.tools/cache" UV_PYTHON_INSTALL_DIR="$PWD/.tools/python"
     # uv builds the environment without ensurepip (missing on Debian) and can fetch Python itself.
     if [ -x .tools/uv ] || fetch_uv; then
         say "Creating the Python environment with uv (about a minute)..."
