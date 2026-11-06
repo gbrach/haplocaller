@@ -218,26 +218,29 @@ class DefaultsAndColourTests(unittest.TestCase):
         with patch.object(ui, 'MODE', 'auto'), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(ui.paint('hello'), 'hello')
 
-    def test_sup_default_and_remembered_quality(self):
+    def test_fresh_defaults_ignore_remembered_choices(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             source, table = root / 'input.pod5', root / 'samples.csv'
             source.touch()
             table.write_text('barcode,alias\nbarcode01,sample_A\n')
             (root / '.basecall').mkdir()
-            write_json(root / '.basecall/last_choices.json', {'tier': 'fast', 'min_qscore': 11})
-            profile = {'name': 'test', 'work_root': str(root), 'default_gpus': 2}
+            write_json(root / '.basecall/last_choices.json', {'tier': 'fast', 'min_qscore': 11, 'output': 'bam', 'unclassified': 'discard'})
+            profile = {'name': 'test', 'work_root': str(root), 'default_gpus': 2, 'python': 'python3'}
             info = {'input': str(source), 'reads': 10, 'bytes': 1000, 'kit': 'SQK-NBD114-96',
                     'files': [{'path': str(source)}]}
             with patch.object(cli, 'check_profile'), patch.object(cli, 'read_input', return_value=info), \
                  patch.object(cli, 'path_input', side_effect=[source, table]), \
                  patch.object(cli, 'select_software', return_value={'version': '2.1.0'}), \
+                 patch.object(cli, 'command', return_value=SimpleNamespace(returncode=0)), \
                  patch('builtins.input', return_value=''), contextlib.redirect_stdout(io.StringIO()):
                 cfg = cli.collect(profile, SimpleNamespace(no_update_check=True))
             self.assertEqual(cfg['tier'], 'sup')
-            self.assertEqual(cfg['min_qscore'], 11)
+            self.assertEqual(cfg['min_qscore'], 7)
             self.assertEqual(cfg['runtime_days'], 14)
-            self.assertEqual(cfg['output'], 'fastq')
+            self.assertEqual(cfg['outputs'], ['fastq'])
+            self.assertEqual(cfg['unclassified'], 'keep')
+            self.assertTrue(cfg['pod5'])
 
 
 if __name__ == '__main__':

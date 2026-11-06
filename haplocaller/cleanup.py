@@ -6,7 +6,7 @@ import stat
 import subprocess
 from pathlib import Path
 
-from .common import run_file, UserError, timestamp, valid_alias, write_json
+from .common import outputs, run_file, UserError, timestamp, valid_alias, write_json
 
 
 def cleanup_run(root, check_scheduler=True):
@@ -29,7 +29,7 @@ def _cleanup_run(root, check_scheduler):
     report = json.loads(report_path.read_text())
     if state.get('state') not in ('complete', 'pilot_complete') or report.get('verification') != 'passed':
         raise UserError('Cleanup requires a completed run with verified output.')
-    if config['output'] not in ('fastq', 'bam'):
+    if not set(outputs(config)) <= {'fastq', 'bam'}:
         raise UserError('Unknown output format; temporary files kept.')
     if check_scheduler and (run_file(root, 'submission.json')).is_file():
         submitted = json.loads((run_file(root, 'submission.json')).read_text())
@@ -52,20 +52,21 @@ def _cleanup_run(root, check_scheduler):
         if sum(row[field] for row in rows) != report[report_field]:
             raise UserError('Output manifest differs from verification; temporary files kept.')
 
-    output = root / config['output']
-    suffix = '.fastq.gz' if config['output'] == 'fastq' else '.bam'
-    expected = {row['alias'] + suffix for row in rows if row['reads'] > 0}
-    if output.is_symlink() or {p.name for p in output.iterdir()} != expected:
-        raise UserError('Final output files differ from verification; temporary files kept.')
-    verified_at = report_path.stat().st_mtime_ns
-    outputs = []
-    for name in sorted(expected):
-        path = output / name
-        identity = path.lstat()
-        if (not stat.S_ISREG(identity.st_mode) or identity.st_size == 0
-                or max(identity.st_mtime_ns, identity.st_ctime_ns) > verified_at):
-            raise UserError(f'Final output changed since verification: {path}. Temporary files kept.')
-        outputs.append((path, identity))
+    suffixes = {'fastq': '.fastq.gz', 'bam': '.bam'}
+    final_files = []
+    for kind in outputs(config):
+        output = root / kind
+        expected = {row['alias'] + suffixes[kind] for row in rows if row['reads'] > 0}
+        if output.is_symlink() or {p.name for p in output.iterdir()} != expected:
+            raise UserError('Final output files differ from verification; temporary files kept.')
+        verified_at = report_path.stat().st_mtime_ns
+        for name in sorted(expected):
+            path = output / name
+            identity = path.lstat()
+            if (not stat.S_ISREG(identity.st_mode) or identity.st_size == 0
+                    or max(identity.st_mtime_ns, identity.st_ctime_ns) > verified_at):
+                raise UserError(f'Final output changed since verification: {path}. Temporary files kept.')
+            final_files.append((path, identity))
 
     targets = [root / name for name in ('tmp', 'models', 'code', 'input') if (root / name).exists() or (root / name).is_symlink()]
     input_paths = {Path(row['path']).resolve() for row in config['probe']['files']}
@@ -135,7 +136,7 @@ def _cleanup_run(root, check_scheduler):
             if source.is_symlink() or not source.is_file() or destination.exists() or destination.is_symlink():
                 raise UserError(f'Cannot move {source} into logs/ without replacing a file.')
             moves.append((source, destination))
-    for path, identity in outputs + files:
+    for path, identity in final_files + files:
         if path.lstat() != identity:
             raise UserError(f'File changed during cleanup checks: {path}')
     if not files and not directories and not moves:

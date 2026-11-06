@@ -6,7 +6,7 @@ import sys
 MODE = 'auto'
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 STYLES = {'title': '1;36', 'label': '1', 'accent': '36', 'ok': '32',
-          'warning': '33', 'error': '1;31', 'muted': '2', 'selected': '1;32'}
+          'warning': '33', 'error': '1;31', 'alert': '1;97;41', 'muted': '2', 'selected': '1;32'}
 
 
 def enabled(stream=None):

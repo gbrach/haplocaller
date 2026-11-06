@@ -149,3 +149,14 @@ def slurm_args(config, job_script, test_only=False, role='basecall', dependency=
     if test_only:
         args.append('--test-only')
     return args + [str(job_script)]
+
+
+def outputs(config):
+    """Basecall file formats of a run, in folder order. Older runs only have the single "output" entry."""
+    return list(config.get('outputs') or [config['output']])
+
+
+def native_format(config):
+    """What Dorado itself writes. FASTQ only when nothing else is needed; BAM carries the parent read
+    and barcode tags that the BAM output, the FASTQ-from-BAM output and the POD5 export all rely on."""
+    return 'fastq' if outputs(config) == ['fastq'] and not config.get('pod5') else 'bam'

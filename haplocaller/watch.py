@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from . import ui
-from .common import run_file, state_dir, UserError, human_size
+from .common import outputs, run_file, state_dir, UserError, human_size
 from .verification import revalidated
 
 BAD_STATES = {'FAILED', 'CANCELLED', 'TIMEOUT', 'OUT_OF_MEMORY', 'NODE_FAIL',
@@ -345,7 +345,8 @@ class Monitor:
         eta = (total - done) / rate if rate and total > done and phase == 'basecalling' else None
         if counts.get('last_growth') and time.time() - counts['last_growth'] > 120:
             eta = None
-        output = file_totals(self.root / cfg['output'], ('.fastq.gz', '.bam'))
+        totals = [file_totals(self.root / kind, ('.fastq.gz', '.bam')) for kind in outputs(cfg)]
+        output = {key: sum(item[key] for item in totals) for key in totals[0]}
         latest = [line for line in tail(run_file(self.root, 'run.log')).splitlines() if line.strip()]
         return {'config': cfg, 'job': self.submission.get('job_id'), 'phase': phase, 'message': message,
                 'scheduler': scheduler, 'counts': counts, 'total': total, 'elapsed': elapsed, 'rate': rate,
@@ -398,13 +399,13 @@ def render(data):
     lines += ['', ui.paint('FINAL FILES', 'label') + f'   {output["files"]} ready  /  {human_size(output["bytes"])}'
               + '   |   Free ' + human_size(data['free_bytes'])]
     if phase == 'exporting':
-        expected = len(counts.get('aliases', {}))
+        expected = len(counts.get('aliases', {})) * len(outputs(cfg))
         if expected and counts.get('caught_up'):
-            lines += [ui.bar(output['files'], expected, width) + f' {output["files"]}/{expected} samples verified']
+            lines += [ui.bar(output['files'], expected, width) + f' {output["files"]}/{expected} files verified']
         lines += [f'{output["partial"]} files being written or verified; the job is still working.']
     elif phase == 'basecalling':
         lines += [ui.paint('Final files are assembled and verified after basecalling.', 'muted')]
-    lines += [ui.clean(str(Path(cfg['run_dir']) / cfg['output']))]
+    lines += [ui.clean(str(Path(cfg['run_dir']) / kind)) for kind in outputs(cfg)]
     if data['message'] and phase != 'basecalling':
         lines += ['', ui.paint(data['message'], style)]
     if data['warning'] or data['scheduler'].get('error'):

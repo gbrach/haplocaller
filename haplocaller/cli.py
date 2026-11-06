@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from . import software, ui
-from .common import plan_shards, run_file, state_dir, UserError, command, human_size, mapping_tables, qscore_integer, slurm_args, timestamp, valid_alias, write_json
+from .common import outputs, plan_shards, run_file, state_dir, UserError, command, human_size, mapping_tables, qscore_integer, slurm_args, timestamp, valid_alias, write_json
 from .verification import revalidated
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -209,11 +209,46 @@ def preview(config):
     ui.field('Runtime', f'{config["runtime_days"]} days requested' + (' per part' if parts > 1 else '') if config.get('runtime_days') else config['profile']['time'])
     ui.field('Quality', 'keep all reads' if config['min_qscore'] == 0 else f'keep Q ≥ {config["min_qscore"]:g}')
     ui.field('Unclassified', config['unclassified'])
-    ext, folder = ('fastq.gz', 'fastq') if config['output'] == 'fastq' else ('bam', 'bam')
-    ui.field('Results', f'{config["run_dir"]}/{folder}/<sample>.{ext}')
+    for kind in outputs(config):
+        ui.field('Results', f'{config["run_dir"]}/{kind}/<sample>.' + ('fastq.gz' if kind == 'fastq' else 'bam'))
     ui.field('Counts / log', f'{config["run_dir"]}/logs/sample_counts.tsv and logs/run.log')
-    ui.field('POD5 export', 'none')
+    if config.get('pod5'):
+        ui.field('POD5 export', f'{config["run_dir"]}/pod5/<sample>.pod5 (all reads, even low quality)')
+        pod5_warning(config['profile'], config['probe'])
+    else:
+        ui.field('POD5 export', 'none')
     print(ui.paint('  Small test: up to 1,000 raw reads. Full mode: the entire input.', 'muted'))
+
+
+def free_space(path):
+    path = Path(path).expanduser()
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    return shutil.disk_usage(path).free
+
+
+def pod5_warning(profile, info, header=True):
+    """Big red box: the demultiplexed POD5 copy is about as large as the whole input."""
+    need, free = info['bytes'], free_space(profile['work_root'])
+    fits = need <= free * 0.9
+    lines = ['WARNING: DISK SPACE',
+             f'Demultiplexed POD5 re-writes every raw signal: about {human_size(need)} of NEW files',
+             f'(the input is {human_size(need)}; free space on {profile["work_root"]} is {human_size(free)}).',
+             'It is written last, after the basecalls are finished and checked.']
+    lines.append('THIS DOES NOT FIT. Free up space, or answer n.' if not fits
+                 else 'Answer n if you only need FASTQ/BAM and do not need to keep the raw signal.')
+    width = max(len(line) for line in lines) + 4
+    print()
+    for line in lines:
+        ui.notice(f'  {line:<{width - 2}}  ', 'alert')
+    print()
+    return fits
+
+
+def pod5_choice(profile, info):
+    print(ui.paint('\nDemultiplexed POD5: raw signal sorted into one POD5 per sample (all reads, including low quality), so the data can be re-basecalled later.', 'muted'))
+    pod5_warning(profile, info)
+    return yes('Also export demultiplexed POD5?', True)
 
 
 def collect(profile, args):
@@ -240,16 +275,18 @@ def collect(profile, args):
     kit = ask('Barcode kit', info['kit'] or 'SQK-NBD114-96').upper()
     if not valid_alias(kit):
         raise UserError('Invalid kit name.')
-    output = ('fastq', 'bam')[choose('Output', ['FASTQ.gz — one file per sample', 'BAM — one unaligned file per sample'],
-                                    ('fastq', 'bam').index(last.get('output', 'fastq')))]
+    # These are proposed fresh for every run, not remembered from the last one.
+    selected = choose('Basecall files', ['FASTQ.gz — one file per sample', 'BAM — one unaligned file per sample',
+                                         'FASTQ.gz and BAM — both'], 0)
+    formats = (['fastq'], ['bam'], ['fastq', 'bam'])[selected]
     while True:
         try:
-            qscore = qscore_integer(ask('Minimum Q score (whole number; 0 keeps all reads)', last.get('min_qscore', profile.get('default_min_qscore', 7))))
+            qscore = qscore_integer(ask('Minimum Q score (whole number; 0 keeps all reads)', profile.get('default_min_qscore', 7)))
             break
         except UserError as error:
             ui.notice(str(error), 'error')
-    unclassified = ('keep', 'discard')[choose('Unclassified reads', ['Keep in an unclassified file', 'Discard'],
-                                             ('keep', 'discard').index(last.get('unclassified', 'keep')))]
+    unclassified = ('keep', 'discard')[choose('Unclassified reads', ['Keep in an unclassified file', 'Discard'], 0)]
+    pod5_export = pod5_choice(profile, info)
     while True:
         gpus = ask('GPUs per job' if profile.get('max_days') else 'GPUs', last.get('gpus', profile['default_gpus']))
         if gpus.isdigit() and int(gpus) >= 1:
@@ -291,14 +328,14 @@ def collect(profile, args):
         else:
             break
     selected_software = select_software(profile, args.no_update_check)
-    if output == 'bam':
-        result = command([profile['python'], '-c', 'import pysam'], capture_output=True)
+    if 'bam' in formats or pod5_export:
+        result = command([profile['python'], '-c', 'import pysam' + (', pod5' if pod5_export else '')], capture_output=True)
         if result.returncode:
-            raise UserError('BAM output needs pysam in the cluster Python. Ask the profile maintainer to install it once, or select FASTQ.gz.')
+            raise UserError('BAM output and POD5 export need pysam and pod5 in the cluster Python. Run ./install.sh again, or select FASTQ.gz without the POD5 export.')
     return {'schema_version': 1, 'name': name, 'run_dir': str(root / name), 'profile': profile,
             'probe': info, 'original_input': str(source), 'mapping': mapping, 'mapping_label': tables[0]['label'],
             'mapping_source': str(table), 'mapping_sha256': hashlib.sha256(table.read_bytes()).hexdigest(),
-            'tier': tier, 'kit': kit, 'output': output, 'min_qscore': qscore,
+            'tier': tier, 'kit': kit, 'output': formats[0], 'outputs': formats, 'pod5': pod5_export, 'min_qscore': qscore,
             'unclassified': unclassified, 'gpus': gpus, 'parts': parts, 'runtime_days': days, 'software': selected_software,
             'stage_input': False, 'mode': 'pilot', 'created_at': timestamp()}
 
@@ -366,8 +403,7 @@ def prepare(config):
         write_json(run_file(run, 'status.json'), {'state': 'ready', 'message': 'Prepared; no job submitted.', 'updated_at': timestamp()})
         cache.mkdir(parents=True, exist_ok=True)
         write_json(cache / 'last_choices.json', {'input': config.get('original_input', config['probe']['input']),
-                   'table': config.get('mapping_source'), 'tier': config['tier'], 'output': config['output'],
-                   'min_qscore': config['min_qscore'], 'unclassified': config['unclassified'], 'gpus': config['gpus'],
+                   'table': config.get('mapping_source'), 'tier': config['tier'], 'gpus': config['gpus'],
                    'runtime_days': config.get('runtime_days', 14), 'parts': config.get('parts', 1), 'run': str(run)})
         ui.notice(f'Prepared {run}', 'ok')
         return run
@@ -451,7 +487,7 @@ def status(run):
                 result = command(['sacct', '-X', '-j', job, '-nP', '--format=State,ExitCode'], capture_output=True)
                 if result.stdout.strip():
                     print('Scheduler: ' + result.stdout.strip())
-    print('Results: ' + str(run / ('fastq' if config['output'] == 'fastq' else 'bam')))
+    print('Results: ' + ', '.join(str(run / kind) for kind in outputs(config) + (['pod5'] if config.get('pod5') else [])))
     print('Log: ' + str(run_file(run, 'run.log')))
 
 
