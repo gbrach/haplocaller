@@ -25,3 +25,4 @@ __pycache__/
 *.crai
 *.sam
 /.tools/
+!/example/pod5/*.pod5

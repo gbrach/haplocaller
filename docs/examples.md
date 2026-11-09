@@ -10,6 +10,10 @@ barcode02,strain_B
 
 Replace `<you>` and every path with your own. The Pangloss paths are real ones from the Candida plate 3 run; the Unistra paths are placeholders. Install first (see the [README](../README.md)).
 
+## Try the bundled example
+
+The repository includes `example/pod5/` (12 POD5 files, 900 raw reads from a real run, about 49 MB) and `example/barcodes.tsv` (96 barcodes with made-up strain names). Use them for the first **Submit small test**, with kit `SQK-NBD114-96`. On Pangloss, copy the `example` folder under `/ssd_workspace/<you>` first.
+
 ## Pangloss
 
 Your data must already be under `/ssd_workspace/<you>`. POD5s are never copied.
@@ -44,7 +48,7 @@ haplocaller
 | Model / kit / format | HAC, `SQK-NBD114-96`, FASTQ.gz |
 | Minimum Q score, GPUs per part | 7, 1 |
 
-Results land in `~/haplocaller_runs/<run name>/fastq/`. Slurm account `facvie`, partition `publicgpu`. No Dorado module exists here, so install with `./install.sh --dorado download`.
+Results land in `~/haplocaller_runs/<run name>/fastq/`. Slurm account `facvie`, partition `publicgpu`. No Dorado module exists here, so the installer downloads a private copy.
 
 ## After the wizard
 
@@ -52,6 +56,5 @@ Pick **Submit small test** first. Then:
 
 ```bash
 haplocaller watch        # live progress; Ctrl+C leaves the job running
-haplocaller status
 haplocaller status       # the last lines give the Results and Log paths; cd there
 ```

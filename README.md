@@ -12,7 +12,7 @@ cd haplocaller
 ./install.sh
 ```
 
-No admin rights needed. Keep the folder in place. Once a day, `haplocaller` offers to update itself.
+No admin rights needed. If the cluster has no Dorado, the installer downloads a private copy. Keep the folder in place. When a new version is available, `haplocaller` offers to update itself at start (it checks GitHub at most once a day).
 
 ## Use
 
@@ -24,7 +24,7 @@ The wizard asks for your POD5 folder, a CSV/TSV barcode table (`barcode`, `alias
 
 POD5 export copies all raw signal, so it needs about as much free disk as your input. The wizard warns you in red.
 
-Examples per cluster: [docs/examples.md](docs/examples.md)
+Try it first with the bundled example (900 reads, 96 barcodes): `example/pod5` and `example/barcodes.tsv`. Examples per cluster: [docs/examples.md](docs/examples.md)
 
 ## Commands
 
